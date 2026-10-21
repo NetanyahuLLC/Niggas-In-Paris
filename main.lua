@@ -723,6 +723,12 @@ task.spawn(function()
                     hrp.CFrame = COLLECT_CFRAME + Vector3.new(0, 3, 0)
                     autocollect.last = tick()
                     view:Notify("Auto-collect: dropped at collect point")
+                    -- land, collect, then head home
+                    task.delay(3, function()
+                        if alive and warpRemote then
+                            pcall(function() warpRemote:FireServer("Home") end)
+                        end
+                    end)
                 end
             end
         end)
