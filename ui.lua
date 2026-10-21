@@ -105,6 +105,13 @@ function UI.new(options)
     self.SoundToggled = soundToggled.Event
     self.CrateBuy = crateBuy.Event
 
+    local autobuyRowToggled = Instance.new("BindableEvent")
+    local autobuyCountChanged = Instance.new("BindableEvent")
+    local autobuyMasterToggled = Instance.new("BindableEvent")
+    self.AutobuyRowToggled = autobuyRowToggled.Event
+    self.AutobuyCountChanged = autobuyCountChanged.Event
+    self.AutobuyMasterToggled = autobuyMasterToggled.Event
+
     local window = card(gui, {
         Name = "MainWindow",
         Size = UDim2.fromOffset(540, 390),
@@ -168,7 +175,7 @@ function UI.new(options)
             local button = make("TextButton", bar, {
                 Text = name,
                 Font = Enum.Font.GothamMedium,
-                TextSize = 11,
+                TextSize = 10,
                 AutoButtonColor = false,
                 BorderSizePixel = 0,
                 BackgroundColor3 = colors.panel,
@@ -191,7 +198,7 @@ function UI.new(options)
     -- Layout first, then select, so "home" is captured correctly.
     local pages, selectMainTab = tabs(
         window,
-        {"Token Exchange", "Markets", "Crates", "Settings"},
+        {"Exchange", "Markets", "Crates", "AutoBuy", "Settings"},
         UDim2.new(1, -306, 0, 6),
         UDim2.fromOffset(290, 26)
     )
@@ -199,7 +206,7 @@ function UI.new(options)
         page.Position = UDim2.fromOffset(12, 52)
         page.Size = UDim2.new(1, -24, 1, -64)
     end
-    selectMainTab("Token Exchange")
+    selectMainTab("Exchange")
 
     local function info(parentObj, name, y)
         local box = card(parentObj, {
@@ -222,8 +229,8 @@ function UI.new(options)
         })
     end
 
-    local priceLabel = info(pages["Token Exchange"], "Current Token Price", 0)
-    local epochLabel = info(pages["Token Exchange"], "Next Price Switch", 56)
+    local priceLabel = info(pages.Exchange, "Current Token Price", 0)
+    local epochLabel = info(pages.Exchange, "Next Price Switch", 56)
     local restockLabel = info(pages.Markets, "Shop Restock", 0)
 
     local shopPages, selectShopTab = tabs(
@@ -328,6 +335,136 @@ function UI.new(options)
         row.buy.TextColor3 = canBuy and colors.background or colors.muted
         row.buy.AutoButtonColor = canBuy
         row.buy.Active = canBuy
+    end
+
+    -- AutoBuy page: master toggle + per-crate config rows
+    local autobuyMaster = make("TextButton", pages.AutoBuy, {
+        Text = "AUTO BUY: OFF",
+        Font = Enum.Font.GothamBold,
+        TextSize = 11,
+        BackgroundColor3 = colors.panel,
+        TextColor3 = colors.secondary,
+        AutoButtonColor = false,
+        BorderSizePixel = 0,
+        Position = UDim2.fromOffset(0, 0),
+        Size = UDim2.new(1, 0, 0, 30),
+    })
+    corner(autobuyMaster, 5)
+    connect(autobuyMaster.Activated, function()
+        local enabled = autobuyMaster.Text == "AUTO BUY: OFF"
+        autobuyMaster.Text = enabled and "AUTO BUY: ON" or "AUTO BUY: OFF"
+        autobuyMaster.BackgroundColor3 = enabled and colors.white or colors.panel
+        autobuyMaster.TextColor3 = enabled and colors.background or colors.secondary
+        autobuyMasterToggled:Fire(enabled)
+    end)
+
+    local autobuyList = make("ScrollingFrame", pages.AutoBuy, {
+        Size = UDim2.new(1, 0, 1, -38),
+        Position = UDim2.fromOffset(0, 38),
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        ScrollBarThickness = 3,
+        CanvasSize = UDim2.new(),
+        AutomaticCanvasSize = Enum.AutomaticSize.Y,
+    })
+    make("UIListLayout", autobuyList, {
+        Padding = UDim.new(0, 6),
+        SortOrder = Enum.SortOrder.LayoutOrder,
+    })
+
+    self.autobuyRows = {}
+
+    function self:AddAutobuyRow(item)
+        local row = card(autobuyList, {
+            Size = UDim2.new(1, -5, 0, 46),
+            LayoutOrder = item.order,
+        })
+        label(row, {
+            Text = item.name,
+            TextColor3 = colors.white,
+            TextSize = 11,
+            Position = UDim2.fromOffset(12, 5),
+            Size = UDim2.new(0.4, -20, 0, 16),
+        })
+        local progress = label(row, {
+            Text = "0/" .. tostring(item.count or 1) .. " bought",
+            TextSize = 9,
+            Position = UDim2.fromOffset(12, 26),
+            Size = UDim2.new(0.4, -20, 0, 14),
+        })
+        local toggle = make("TextButton", row, {
+            Text = "OFF",
+            TextSize = 9,
+            Font = Enum.Font.GothamMedium,
+            BackgroundColor3 = colors.panel,
+            TextColor3 = colors.secondary,
+            AutoButtonColor = false,
+            BorderSizePixel = 0,
+            Position = UDim2.new(0.44, 0, 0.5, -12),
+            Size = UDim2.fromOffset(54, 24),
+        })
+        corner(toggle, 5)
+        local minus = make("TextButton", row, {
+            Text = "-",
+            TextSize = 14,
+            Font = Enum.Font.GothamBold,
+            BackgroundColor3 = colors.panel,
+            TextColor3 = colors.white,
+            AutoButtonColor = false,
+            BorderSizePixel = 0,
+            Position = UDim2.new(1, -156, 0.5, -12),
+            Size = UDim2.fromOffset(24, 24),
+        })
+        corner(minus, 5)
+        local countLbl = label(row, {
+            Text = tostring(item.count or 1),
+            TextColor3 = colors.white,
+            TextXAlignment = Enum.TextXAlignment.Center,
+            Position = UDim2.new(1, -126, 0.5, -12),
+            Size = UDim2.fromOffset(32, 24),
+        })
+        local plus = make("TextButton", row, {
+            Text = "+",
+            TextSize = 14,
+            Font = Enum.Font.GothamBold,
+            BackgroundColor3 = colors.panel,
+            TextColor3 = colors.white,
+            AutoButtonColor = false,
+            BorderSizePixel = 0,
+            Position = UDim2.new(1, -92, 0.5, -12),
+            Size = UDim2.fromOffset(24, 24),
+        })
+        corner(plus, 5)
+
+        local count = math.max(1, math.floor(item.count or 1))
+        connect(minus.Activated, function()
+            count = math.max(1, count - 1)
+            countLbl.Text = tostring(count)
+            autobuyCountChanged:Fire(item.id, count)
+        end)
+        connect(plus.Activated, function()
+            count = math.min(99, count + 1)
+            countLbl.Text = tostring(count)
+            autobuyCountChanged:Fire(item.id, count)
+        end)
+        connect(toggle.Activated, function()
+            local enabled = toggle.Text == "OFF"
+            toggle.Text = enabled and "ON" or "OFF"
+            toggle.BackgroundColor3 = enabled and colors.white or colors.panel
+            toggle.TextColor3 = enabled and colors.background or colors.secondary
+            autobuyRowToggled:Fire(item.id, enabled)
+        end)
+
+        self.autobuyRows[item.id] = {
+            progress = progress,
+            count = countLbl,
+            toggle = toggle,
+        }
+    end
+
+    function self:SetAutobuyProgress(id, text)
+        local row = self.autobuyRows[id]
+        if row then row.progress.Text = text end
     end
 
     function self:AddItem(category, item)
@@ -601,6 +738,9 @@ function UI.new(options)
             shown:Destroy()
             soundToggled:Destroy()
             crateBuy:Destroy()
+            autobuyRowToggled:Destroy()
+            autobuyCountChanged:Destroy()
+            autobuyMasterToggled:Destroy()
         end)
     end)
 
