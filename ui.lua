@@ -123,12 +123,6 @@ function UI.new(options)
         Size = UDim2.fromOffset(290, 22),
     })
     label(window, {
-        Text = "TOKEN MARKET / LIVE MONITOR",
-        TextSize = 9,
-        Position = UDim2.fromOffset(16, 30),
-        Size = UDim2.fromOffset(280, 15),
-    })
-    label(window, {
         Text = "RSHIFT / HIDE",
         TextSize = 9,
         Position = UDim2.new(1, -110, 0, 32),
@@ -197,7 +191,7 @@ function UI.new(options)
     -- Layout first, then select, so "home" is captured correctly.
     local pages, selectMainTab = tabs(
         window,
-        {"Market", "Shops", "Crates", "Settings"},
+        {"Token Exchange", "Markets", "Crates", "Settings"},
         UDim2.new(1, -306, 0, 6),
         UDim2.fromOffset(290, 26)
     )
@@ -205,7 +199,7 @@ function UI.new(options)
         page.Position = UDim2.fromOffset(12, 52)
         page.Size = UDim2.new(1, -24, 1, -64)
     end
-    selectMainTab("Market")
+    selectMainTab("Token Exchange")
 
     local function info(parentObj, name, y)
         local box = card(parentObj, {
@@ -228,12 +222,12 @@ function UI.new(options)
         })
     end
 
-    local priceLabel = info(pages.Market, "Current Token Price", 0)
-    local epochLabel = info(pages.Market, "Next Price Switch", 56)
-    local restockLabel = info(pages.Shops, "Shop Restock", 0)
+    local priceLabel = info(pages["Token Exchange"], "Current Token Price", 0)
+    local epochLabel = info(pages["Token Exchange"], "Next Price Switch", 56)
+    local restockLabel = info(pages.Markets, "Shop Restock", 0)
 
     local shopPages, selectShopTab = tabs(
-        pages.Shops,
+        pages.Markets,
         {"Hardware", "Data Sources", "Data Packs"},
         UDim2.fromOffset(0, 56),
         UDim2.new(1, 0, 0, 30)
