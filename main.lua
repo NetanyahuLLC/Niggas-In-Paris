@@ -66,9 +66,22 @@ local function number(value)
     end
 end
 
+local WORD_SCALES = {
+    {1e12, "Trillion"},
+    {1e9, "Billion"},
+    {1e6, "Million"},
+}
+
 local function formatNumber(value)
     local n = number(value)
     if not n then return "N/A" end
+    local absN = math.abs(n)
+    for _, scale in ipairs(WORD_SCALES) do
+        if absN >= scale[1] then
+            local text = string.format("%.1f", n / scale[1]):gsub("%.0$", "")
+            return text .. " " .. scale[2]
+        end
+    end
     if n % 1 == 0 then return tostring(math.floor(n)) end
     return string.format("%.2f", n):gsub("0+$", ""):gsub("%.$", "")
 end
@@ -120,8 +133,8 @@ end
 -- UI / LIFECYCLE
 --==================================================
 local view = UI.new({
-    Name = "TokenMarketHub",
-    Title = "Token Market",
+    Name = "Lezor",
+    Title = "Lezor",
     Parent = player:WaitForChild("PlayerGui"),
 })
 
@@ -291,7 +304,7 @@ do
 
                 local price = number(tier.priceTokens)
                 local priceText = (price ~= nil)
-                    and ("Cost: " .. formatNumber(price) .. " tokens")
+                    and ("Cost: " .. formatNumber(price))
                     or "Cost: N/A"
 
                 view:AddCrate({
