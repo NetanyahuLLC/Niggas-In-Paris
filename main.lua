@@ -108,7 +108,6 @@ local function sortedItems(dict)
         if a.price ~= nil and b.price ~= nil and a.price ~= b.price then
             return a.price < b.price
         end
-        -- FIX: Cache lowercase strings to avoid redundant function calls during sort
         local nameA = a.name:lower()
         local nameB = b.name:lower()
         if nameA == nameB then return a.key < b.key end
@@ -233,21 +232,18 @@ connect(view.AlertToggled, function(id)
     if state.enabled then checkAlert(id, readStock(id)) end
 end)
 
-if view.SoundToggled then
-    connect(view.SoundToggled, function(enabled)
-        soundEnabled = enabled == true
-        if not soundEnabled then stopSounds() end
-    end)
-end
+connect(view.SoundToggled, function(enabled)
+    soundEnabled = enabled == true
+    if not soundEnabled then stopSounds() end
+end)
 
--- FIX: Safely handle cases where Config categories might be missing
 for _, category in ipairs({
     {name = "Hardware", data = Config.Hardware},
     {name = "Data Sources", data = Config.DataSources},
     {name = "Data Packs", data = Config.Datasets},
 }) do
     for index, item in ipairs(sortedItems(category.data)) do
-        local id = item.name
+        local id = category.name .. "/" .. item.key
         states[id] = states[id] or {
             name = item.name,
             enabled = false,
@@ -269,6 +265,131 @@ for _, category in ipairs({
         })
     end
 end
+
+--==================================================
+-- BLACK MARKET CRATES (dealer stock + buying)
+-- Mirrors the game's BlackMarketUI client: stock lives on the
+-- "CrateStock_<tierId>" player attribute, and buying fires
+-- Remotes.BlackMarketBuy:InvokeServer("crate", tierId).
+--==================================================
+local remotes = ReplicatedStorage:WaitForChild("Remotes", 10)
+local blackMarketBuy = remotes and remotes:WaitForChild("BlackMarketBuy", 10) or nil
+if not blackMarketBuy then
+    warn("[Market Hub] BlackMarketBuy remote not found; crate buying disabled.")
+end
+
+local crateStates = {}
+do
+    local tiers = (type(Config.CrateShop) == "table") and Config.CrateShop.tiers or nil
+    if type(tiers) == "table" then
+        local order = 0
+        for _, tier in pairs(tiers) do
+            if type(tier) == "table" and tier.dealerEnabled ~= false then
+                order = order + 1
+                local id = tostring(tier.id)
+                crateStates[id] = {tier = tier, lastStock = nil, buying = false}
+
+                local price = number(tier.priceTokens)
+                local priceText = (price ~= nil)
+                    and ("Cost: " .. formatNumber(price) .. " tokens")
+                    or "Cost: N/A"
+
+                view:AddCrate({
+                    id = id,
+                    name = tostring(tier.name or id),
+                    order = order,
+                    priceText = priceText,
+                })
+            end
+        end
+    else
+        warn("[Market Hub] CrateShop tiers not found in Config.")
+    end
+end
+
+local function myTokens()
+    return number(player:GetAttribute("Tokens")) or 0
+end
+
+local function readCrateStock(id)
+    local n = number(player:GetAttribute("CrateStock_" .. id))
+    if n then return math.max(0, math.floor(n)) end
+    return 0
+end
+
+local function updateCrates()
+    local tokens = myTokens()
+    for id, state in pairs(crateStates) do
+        local amount = readCrateStock(id)
+        if state.lastStock ~= amount then
+            state.lastStock = amount
+            view:SetCrateStock(
+                id,
+                amount > 0 and ("Stock: " .. formatNumber(amount)) or "OUT OF STOCK",
+                amount > 0
+            )
+        end
+
+        local price = number(state.tier.priceTokens) or 0
+        if state.buying then
+            view:SetCrateBuy(id, "BUYING...", false)
+        elseif amount <= 0 then
+            view:SetCrateBuy(id, "SOLD OUT", false)
+        elseif tokens < price then
+            view:SetCrateBuy(id, "NEED " .. formatNumber(price), false)
+        else
+            view:SetCrateBuy(id, "BUY", true)
+        end
+    end
+end
+
+connect(view.CrateBuy, function(id)
+    local state = crateStates[id]
+    if not state or state.buying then return end
+
+    if not blackMarketBuy then
+        view:Notify("Buy remote unavailable")
+        return
+    end
+
+    local amount = readCrateStock(id)
+    if amount <= 0 then
+        view:Notify(tostring(state.tier.name or id) .. " is out of stock")
+        return
+    end
+
+    local price = number(state.tier.priceTokens) or 0
+    if myTokens() < price then
+        view:Notify("Not enough tokens (need " .. formatNumber(price) .. ")")
+        return
+    end
+
+    state.buying = true
+    updateCrates()
+
+    task.spawn(function()
+        local ok, result = pcall(function()
+            return blackMarketBuy:InvokeServer("crate", id)
+        end)
+
+        state.buying = false
+
+        if not ok then
+            view:Notify("Buy failed: " .. tostring(result))
+        elseif type(result) == "table" then
+            if result.ok then
+                view:Notify("Bought " .. tostring(state.tier.name or id))
+                playSound()
+            else
+                view:Notify(tostring(result.message or "Can't buy"))
+            end
+        else
+            view:Notify("Unexpected server response")
+        end
+
+        updateCrates()
+    end)
+end)
 
 --==================================================
 -- TOKEN PRICE
@@ -325,6 +446,8 @@ local function update()
         end
         checkAlert(id, amount)
     end
+
+    updateCrates()
 end
 
 task.spawn(function()
