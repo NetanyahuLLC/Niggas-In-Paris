@@ -36,6 +36,7 @@ function UI.new(options)
     end
 
     local function card(parent, props)
+        props = props or {}
         props.BackgroundColor3 = props.BackgroundColor3 or colors.card
         props.BorderSizePixel = 0
         local obj = make("Frame", parent, props)
@@ -57,7 +58,7 @@ function UI.new(options)
             TextXAlignment = Enum.TextXAlignment.Left,
             TextTruncate = Enum.TextTruncate.AtEnd,
         }
-        for key, value in pairs(props) do defaults[key] = value end
+        for key, value in pairs(props or {}) do defaults[key] = value end
         return make("TextLabel", parent, defaults)
     end
 
@@ -67,14 +68,31 @@ function UI.new(options)
         return connection
     end
 
+    -- FIX: Track one tween per object so new animations cancel old ones
+    local objTweens = {}
+
+    local function cancelTween(obj)
+        local existing = objTweens[obj]
+        if existing then
+            objTweens[obj] = nil
+            self.tweens[existing] = nil
+            pcall(function() existing:Cancel() end)
+        end
+    end
+
     local function tween(obj, duration, props)
+        cancelTween(obj)
         local animation = TweenService:Create(
             obj,
             TweenInfo.new(duration, Enum.EasingStyle.Quint, Enum.EasingDirection.Out),
             props
         )
         self.tweens[animation] = true
-        animation.Completed:Once(function() self.tweens[animation] = nil end)
+        objTweens[obj] = animation
+        animation.Completed:Once(function()
+            self.tweens[animation] = nil
+            if objTweens[obj] == animation then objTweens[obj] = nil end
+        end)
         animation:Play()
         return animation
     end
@@ -131,34 +149,40 @@ function UI.new(options)
         Size = UDim2.fromOffset(95, 14),
     })
 
+    -- FIX: tabs() no longer auto-selects. It returns (pages, select) so the
+    -- caller can apply layout positions FIRST, then animate. Each page also
+    -- remembers its "home" position so animations never override layout.
     local function tabs(parentObj, names, position, size)
         local bar = card(parentObj, {
             Position = position,
             Size = size,
             BackgroundColor3 = colors.panel,
         })
-        local buttons, pages = {}, {}
+        local buttons, pages, homes = {}, {}, {}
         local activeName
 
         local function select(name)
             if activeName == name then return end
             activeName = name
             for key, button in pairs(buttons) do
-                local selected = key == name
+                local selected = (key == name)
                 tween(button, 0.16, {
                     BackgroundColor3 = selected and colors.white or colors.panel,
                     TextColor3 = selected and colors.background or colors.secondary,
                 })
                 local page = pages[key]
                 if selected then
+                    local home = homes[page] or page.Position
+                    homes[page] = home
+                    cancelTween(page)
                     page.Visible = true
-                    page.Position = UDim2.fromOffset(0, 5)
-                    page.BackgroundTransparency = 1
-                    tween(page, 0.20, {
-                        Position = UDim2.fromOffset(0, 0),
-                        BackgroundTransparency = 1,
-                    })
+                    page.Position = UDim2.new(
+                        home.X.Scale, home.X.Offset,
+                        home.Y.Scale, home.Y.Offset + 6
+                    )
+                    tween(page, 0.20, {Position = home})
                 else
+                    cancelTween(page)
                     page.Visible = false
                 end
             end
@@ -185,12 +209,10 @@ function UI.new(options)
             connect(button.Activated, function() select(name) end)
         end
 
-        activeName = nil
-        select(names[1])
-        return pages
+        return pages, select
     end
 
-    local pages = tabs(
+    local pages, selectPage = tabs(
         window,
         {"Token Data", "Shops", "Settings"},
         UDim2.new(1, -306, 0, 6),
@@ -200,6 +222,7 @@ function UI.new(options)
         page.Position = UDim2.fromOffset(12, 52)
         page.Size = UDim2.new(1, -24, 1, -64)
     end
+    selectPage("Token Data")
 
     local function info(parentObj, name, y)
         local box = card(parentObj, {
@@ -226,7 +249,7 @@ function UI.new(options)
     local epochLabel = info(pages["Token Data"], "Next Price Switch", 56)
     local restockLabel = info(pages.Shops, "Shop Restock", 0)
 
-    local shops = tabs(
+    local shops, selectShop = tabs(
         pages.Shops,
         {"Hardware", "Data Sources", "Data Packs"},
         UDim2.fromOffset(0, 56),
@@ -251,6 +274,7 @@ function UI.new(options)
         })
         lists[name] = list
     end
+    selectShop("Hardware")
 
     function self:AddItem(category, item)
         assert(lists[category], "Unknown UI category: " .. tostring(category))
@@ -314,7 +338,7 @@ function UI.new(options)
     function self:SetRestockTimer(text) restockLabel.Text = text end
 
     -- Settings page
-    local settingsTitle = label(pages.Settings, {
+    label(pages.Settings, {
         Text = "SETTINGS",
         Font = Enum.Font.GothamBold,
         TextSize = 13,
@@ -393,14 +417,14 @@ function UI.new(options)
         ZIndex = 50,
     })
     make("UISizeConstraint", banner, {MaxSize = Vector2.new(400, 76)})
-    local indicator = make("Frame", banner, {
+    make("Frame", banner, {
         BackgroundColor3 = colors.white,
         BorderSizePixel = 0,
         Position = UDim2.fromOffset(10, 10),
         Size = UDim2.new(0, 4, 1, -20),
         ZIndex = 51,
     })
-    corner(indicator, 2)
+    corner(banner, 6)
     label(banner, {
         Text = "MARKET ALERT",
         Font = Enum.Font.GothamBold,
@@ -430,6 +454,7 @@ function UI.new(options)
         task.spawn(function()
             while self.alive and #self.queue > 0 do
                 message.Text = table.remove(self.queue, 1)
+                cancelTween(banner)
                 banner.Position = UDim2.new(1, 430, 1, -18)
                 banner.Visible = true
                 shown:Fire()
@@ -460,13 +485,32 @@ function UI.new(options)
         end
     end)
 
-    -- FIX: Improved dragging logic for better cross-executor reliability
+    -- FIX: Don't start dragging when the press begins on an interactive
+    -- control (buttons, scrollbars, text boxes), otherwise clicking them
+    -- would drag the window instead.
+    local function dragBlockedAt(position)
+        local root = parent
+        if type(root.GetGuiObjectsAtPosition) ~= "function" then
+            root = Players.LocalPlayer:WaitForChild("PlayerGui")
+        end
+        local node = root:GetGuiObjectsAtPosition(position.X, position.Y)[1]
+        while node and node ~= window and node ~= gui do
+            if node:IsA("TextButton") or node:IsA("ScrollingFrame") or node:IsA("TextBox") then
+                return true
+            end
+            node = node.Parent
+        end
+        return false
+    end
+
     local dragging = false
     local dragStart = Vector2.new(0, 0)
     local startPosition = UDim2.new(0, 0, 0, 0)
 
     connect(window.InputBegan, function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+            if dragBlockedAt(input.Position) then return end
             dragging = true
             dragStart = input.Position
             startPosition = window.Position
@@ -474,7 +518,9 @@ function UI.new(options)
     end)
 
     connect(UserInputService.InputChanged, function(input)
-        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+        if dragging
+            and (input.UserInputType == Enum.UserInputType.MouseMovement
+                or input.UserInputType == Enum.UserInputType.Touch) then
             local delta = input.Position - dragStart
             window.Position = UDim2.new(
                 startPosition.X.Scale, startPosition.X.Offset + delta.X,
@@ -484,7 +530,8 @@ function UI.new(options)
     end)
 
     connect(UserInputService.InputEnded, function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
             dragging = false
         end
     end)
@@ -504,6 +551,8 @@ function UI.new(options)
         for animation in pairs(self.tweens) do
             pcall(function() animation:Cancel() end)
         end
+        table.clear(self.tweens)
+        table.clear(objTweens)
         table.clear(self.queue)
         task.defer(function()
             destroyed:Destroy()
