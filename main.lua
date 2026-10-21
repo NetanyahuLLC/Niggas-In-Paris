@@ -1,27 +1,66 @@
 --==================================================
 -- LOAD UI MODULE FROM GITHUB
 --==================================================
+local VERSION = "Lezor v2.1"
 local UI_URL = "https://raw.githubusercontent.com/NetanyahuLLC/Niggas-In-Paris/refs/heads/main/ui.lua"
 
-local downloadOK, source = pcall(function()
-    return game:HttpGet(UI_URL)
-end)
-if not downloadOK then
-    error("[Lezor] Failed to download ui.lua:\n" .. tostring(source), 0)
-end
-if type(source) ~= "string" or not source:find("%S") then
-    error("[Lezor] GitHub returned an empty UI response.", 0)
+local function log(...)
+    print("[Lezor]", ...)
 end
 
+-- Try every HTTP method the executor might expose
+local function fetchSource()
+    if type(game) == "table" or typeof(game) == "Instance" then
+        local ok, result = pcall(function() return game:HttpGet(UI_URL) end)
+        if ok and type(result) == "string" and result:find("%S") then
+            log("ui.lua downloaded via game:HttpGet (" .. #result .. " bytes)")
+            return result
+        end
+        log("game:HttpGet failed:", result)
+    end
+    if type(request) == "function" then
+        local ok, result = pcall(function()
+            return request({Url = UI_URL, Method = "GET"}).Body
+        end)
+        if ok and type(result) == "string" and result:find("%S") then
+            log("ui.lua downloaded via request() (" .. #result .. " bytes)")
+            return result
+        end
+        log("request() failed:", result)
+    end
+    if type(http_request) == "function" then
+        local ok, result = pcall(function()
+            return http_request({Url = UI_URL, Method = "GET"}).Body
+        end)
+        if ok and type(result) == "string" and result:find("%S") then
+            log("ui.lua downloaded via http_request() (" .. #result .. " bytes)")
+            return result
+        end
+        log("http_request() failed:", result)
+    end
+    return nil
+end
+
+log("starting " .. VERSION .. "...")
+local source = fetchSource()
+if not source then
+    error("[Lezor] Could not download ui.lua from GitHub. Check your executor's HTTP settings / try a VPN.", 0)
+end
+
+if type(loadstring) ~= "function" then
+    error("[Lezor] loadstring is not available in this executor.", 0)
+end
 local chunk, parseError = loadstring(source, "ui.lua")
 if not chunk then
     error("[Lezor] Downloaded ui.lua has a syntax error:\n" .. tostring(parseError), 0)
 end
+log("ui.lua compiled OK")
 
 local executeOK, result = pcall(chunk)
 if not executeOK then
     error("[Lezor] ui.lua failed while executing:\n" .. tostring(result), 0)
 end
+log("ui.lua executed OK")
 if type(result) ~= "table" or type(result.new) ~= "function" then
     error("[Lezor] ui.lua did not return a valid module with UI.new(options).", 0)
 end
@@ -140,11 +179,13 @@ end
 --==================================================
 -- UI / LIFECYCLE
 --==================================================
+log("building window...")
 local view = UI.new({
     Name = "Lezor",
     Title = "Lezor",
     Parent = player:WaitForChild("PlayerGui"),
 })
+log("window created")
 
 local alive = true
 local connections = {}
@@ -731,4 +772,5 @@ task.spawn(function()
     end
 end)
 
-print("[Lezor] Loaded. Press Right Shift to open or close.")
+log(VERSION .. " loaded. Press Right Shift to open or close.")
+view:Notify(VERSION .. " loaded")
