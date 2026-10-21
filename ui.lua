@@ -82,7 +82,7 @@ function UI.new(options)
     end
 
     local parent = options.Parent or Players.LocalPlayer:WaitForChild("PlayerGui")
-    local guiName = options.Name or "TokenMarketHub"
+    local guiName = options.Name or "Lezor"
     local old = parent:FindFirstChild(guiName)
     if old then old:Destroy() end
 
@@ -112,6 +112,17 @@ function UI.new(options)
     self.AutobuyCountChanged = autobuyCountChanged.Event
     self.AutobuyMasterToggled = autobuyMasterToggled.Event
 
+    local autosellToggled = Instance.new("BindableEvent")
+    local autosellBalance = Instance.new("BindableEvent")
+    local autosellPrice = Instance.new("BindableEvent")
+    local autocollectToggled = Instance.new("BindableEvent")
+    local autocollectInterval = Instance.new("BindableEvent")
+    self.AutosellToggled = autosellToggled.Event
+    self.AutosellBalance = autosellBalance.Event
+    self.AutosellPrice = autosellPrice.Event
+    self.AutocollectToggled = autocollectToggled.Event
+    self.AutocollectInterval = autocollectInterval.Event
+
     local window = card(gui, {
         Name = "MainWindow",
         Size = UDim2.fromOffset(540, 390),
@@ -122,7 +133,7 @@ function UI.new(options)
     })
 
     label(window, {
-        Text = options.Title or "Token Market",
+        Text = options.Title or "Lezor",
         Font = Enum.Font.GothamBold,
         TextSize = 14,
         TextColor3 = colors.white,
@@ -198,7 +209,7 @@ function UI.new(options)
     -- Layout first, then select, so "home" is captured correctly.
     local pages, selectMainTab = tabs(
         window,
-        {"Exchange", "Markets", "Crates", "AutoBuy", "Settings"},
+        {"Exchange", "Markets", "Crates", "Autos", "Settings"},
         UDim2.new(1, -306, 0, 6),
         UDim2.fromOffset(290, 26)
     )
@@ -338,7 +349,7 @@ function UI.new(options)
     end
 
     -- AutoBuy page: master toggle + per-crate config rows
-    local autobuyMaster = make("TextButton", pages.AutoBuy, {
+    local autobuyMaster = make("TextButton", pages.Autos, {
         Text = "AUTO BUY: OFF",
         Font = Enum.Font.GothamBold,
         TextSize = 11,
@@ -358,8 +369,8 @@ function UI.new(options)
         autobuyMasterToggled:Fire(enabled)
     end)
 
-    local autobuyList = make("ScrollingFrame", pages.AutoBuy, {
-        Size = UDim2.new(1, 0, 1, -38),
+    local autobuyList = make("ScrollingFrame", pages.Autos, {
+        Size = UDim2.new(1, 0, 0, 108),
         Position = UDim2.fromOffset(0, 38),
         BackgroundTransparency = 1,
         BorderSizePixel = 0,
@@ -465,6 +476,144 @@ function UI.new(options)
     function self:SetAutobuyProgress(id, text)
         local row = self.autobuyRows[id]
         if row then row.progress.Text = text end
+    end
+
+    -- Preset button row helper (used by AutoSell / AutoCollect cards)
+    local function presetButtons(parentObj, y, options, onPick)
+        local buttons = {}
+        local function highlight(opt)
+            for _, data in ipairs(buttons) do
+                local active = data.opt == opt
+                tween(data.button, 0.12, {
+                    BackgroundColor3 = active and colors.white or colors.panel,
+                    TextColor3 = active and colors.background or colors.secondary,
+                })
+            end
+        end
+        for index, opt in ipairs(options) do
+            local button = make("TextButton", parentObj, {
+                Text = opt.label,
+                Font = Enum.Font.GothamMedium,
+                TextSize = 9,
+                AutoButtonColor = false,
+                BorderSizePixel = 0,
+                BackgroundColor3 = colors.panel,
+                TextColor3 = colors.secondary,
+                Position = UDim2.fromOffset(12 + (index - 1) * 68, y),
+                Size = UDim2.fromOffset(62, 22),
+            })
+            corner(button, 4)
+            table.insert(buttons, {button = button, opt = opt})
+            connect(button.Activated, function()
+                highlight(opt)
+                onPick(opt.value)
+            end)
+        end
+    end
+
+    local function sectionToggle(parentObj, onChange)
+        local toggle = make("TextButton", parentObj, {
+            Text = "OFF",
+            TextSize = 9,
+            Font = Enum.Font.GothamMedium,
+            BackgroundColor3 = colors.panel,
+            TextColor3 = colors.secondary,
+            AutoButtonColor = false,
+            BorderSizePixel = 0,
+            Position = UDim2.new(1, -66, 0, 3),
+            Size = UDim2.fromOffset(54, 20),
+        })
+        corner(toggle, 5)
+        connect(toggle.Activated, function()
+            local enabled = toggle.Text == "OFF"
+            toggle.Text = enabled and "ON" or "OFF"
+            toggle.BackgroundColor3 = enabled and colors.white or colors.panel
+            toggle.TextColor3 = enabled and colors.background or colors.secondary
+            onChange(enabled)
+        end)
+    end
+
+    --========== AUTO SELL ==========
+    local sellCard = card(pages.Autos, {
+        Position = UDim2.fromOffset(0, 148),
+        Size = UDim2.new(1, 0, 0, 94),
+    })
+    label(sellCard, {
+        Text = "AUTO SELL",
+        Font = Enum.Font.GothamBold,
+        TextSize = 10,
+        TextColor3 = colors.white,
+        Position = UDim2.fromOffset(12, 5),
+        Size = UDim2.fromOffset(120, 16),
+    })
+    local sellStatus = label(sellCard, {
+        Text = "Tokens: -- | Exchange: --",
+        TextSize = 9,
+        TextXAlignment = Enum.TextXAlignment.Right,
+        Position = UDim2.new(1, -252, 0, 5),
+        Size = UDim2.fromOffset(240, 16),
+    })
+    label(sellCard, {
+        Text = "SELL WHEN BALANCE IS AT LEAST",
+        TextSize = 8,
+        Position = UDim2.fromOffset(12, 20),
+        Size = UDim2.new(1, -24, 0, 12),
+    })
+    presetButtons(sellCard, 32, {
+        {label = "OFF", value = nil},
+        {label = "5B", value = 5e9},
+        {label = "10B", value = 10e9},
+        {label = "20B", value = 20e9},
+        {label = "30B", value = 30e9},
+        {label = "40B", value = 40e9},
+        {label = "50B", value = 50e9},
+    }, function(value) autosellBalance:Fire(value) end)
+    label(sellCard, {
+        Text = "AND TOKEN EXCHANGE IS AT LEAST",
+        TextSize = 8,
+        Position = UDim2.fromOffset(12, 56),
+        Size = UDim2.new(1, -24, 0, 12),
+    })
+    presetButtons(sellCard, 68, {
+        {label = "OFF", value = nil},
+        {label = "$5", value = 5},
+        {label = "$10", value = 10},
+        {label = "$13", value = 13},
+        {label = "$15", value = 15},
+        {label = "$20", value = 20},
+        {label = "$25", value = 25},
+    }, function(value) autosellPrice:Fire(value) end)
+    sectionToggle(sellCard, function(enabled) autosellToggled:Fire(enabled) end)
+
+    --========== AUTO COLLECT ==========
+    local collectCard = card(pages.Autos, {
+        Position = UDim2.fromOffset(0, 248),
+        Size = UDim2.new(1, 0, 0, 64),
+    })
+    label(collectCard, {
+        Text = "AUTO COLLECT",
+        Font = Enum.Font.GothamBold,
+        TextSize = 10,
+        TextColor3 = colors.white,
+        Position = UDim2.fromOffset(12, 5),
+        Size = UDim2.fromOffset(120, 16),
+    })
+    label(collectCard, {
+        Text = "DROP EVERY",
+        TextSize = 8,
+        Position = UDim2.fromOffset(12, 22),
+        Size = UDim2.new(1, -24, 0, 12),
+    })
+    presetButtons(collectCard, 36, {
+        {label = "1 min", value = 60},
+        {label = "5 min", value = 300},
+        {label = "10 min", value = 600},
+        {label = "15 min", value = 900},
+    }, function(value) autocollectInterval:Fire(value) end)
+    sectionToggle(collectCard, function(enabled) autocollectToggled:Fire(enabled) end)
+
+    function self:SetAutosellStatus(text)
+        sellStatus.Text = tostring(text)
     end
 
     function self:AddItem(category, item)
@@ -741,6 +890,11 @@ function UI.new(options)
             autobuyRowToggled:Destroy()
             autobuyCountChanged:Destroy()
             autobuyMasterToggled:Destroy()
+            autosellToggled:Destroy()
+            autosellBalance:Destroy()
+            autosellPrice:Destroy()
+            autocollectToggled:Destroy()
+            autocollectInterval:Destroy()
         end)
     end)
 
