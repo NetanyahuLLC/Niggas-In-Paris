@@ -1,6 +1,3 @@
-
-    
-  
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
@@ -97,4 +94,108 @@ function UI.new(options)
 
     local destroyed = Instance.new("BindableEvent")
     local toggled = Instance.new("BindableEvent")
+    local shown = Instance.new("BindableEvent")
+    local soundToggled = Instance.new("BindableEvent")
+    self.Destroyed = destroyed.Event
+    self.AlertToggled = toggled.Event
+    self.NotificationShown = shown.Event
+    self.SoundToggled = soundToggled.Event
 
+    local window = card(gui, {
+        Name = "MainWindow",
+        Size = UDim2.fromOffset(540, 390),
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.fromScale(0.5, 0.5),
+        BackgroundColor3 = colors.background,
+        Active = true,
+    })
+
+    label(window, {
+        Text = options.Title or "Token Market",
+        Font = Enum.Font.GothamBold,
+        TextSize = 14,
+        TextColor3 = colors.white,
+        Position = UDim2.fromOffset(16, 8),
+        Size = UDim2.fromOffset(290, 22),
+    })
+    label(window, {
+        Text = "TOKEN MARKET / LIVE MONITOR",
+        TextSize = 9,
+        Position = UDim2.fromOffset(16, 30),
+        Size = UDim2.fromOffset(280, 15),
+    })
+    label(window, {
+        Text = "RSHIFT / HIDE",
+        TextSize = 9,
+        Position = UDim2.new(1, -110, 0, 32),
+        Size = UDim2.fromOffset(95, 14),
+    })
+
+    local function tabs(parentObj, names, position, size)
+        local bar = card(parentObj, {
+            Position = position,
+            Size = size,
+            BackgroundColor3 = colors.panel,
+        })
+        local buttons, pages = {}, {}
+        local activeName
+
+        local function select(name)
+            if activeName == name then return end
+            activeName = name
+            for key, button in pairs(buttons) do
+                local selected = key == name
+                tween(button, 0.16, {
+                    BackgroundColor3 = selected and colors.white or colors.panel,
+                    TextColor3 = selected and colors.background or colors.secondary,
+                })
+                local page = pages[key]
+                if selected then
+                    page.Visible = true
+                    page.Position = UDim2.fromOffset(0, 5)
+                    page.BackgroundTransparency = 1
+                    tween(page, 0.20, {
+                        Position = UDim2.fromOffset(0, 0),
+                        BackgroundTransparency = 1,
+                    })
+                else
+                    page.Visible = false
+                end
+            end
+        end
+
+        for index, name in ipairs(names) do
+            local button = make("TextButton", bar, {
+                Text = name,
+                Font = Enum.Font.GothamMedium,
+                TextSize = 11,
+                AutoButtonColor = false,
+                BorderSizePixel = 0,
+                BackgroundColor3 = colors.panel,
+                TextColor3 = colors.secondary,
+                Position = UDim2.new((index - 1) / #names, 3, 0, 3),
+                Size = UDim2.new(1 / #names, -6, 1, -6),
+            })
+            corner(button, 4)
+            buttons[name] = button
+            pages[name] = make("Frame", parentObj, {
+                BackgroundTransparency = 1,
+                Visible = false,
+            })
+            connect(button.Activated, function() select(name) end)
+        end
+
+        activeName = nil
+        select(names[1])
+        return pages
+    end
+
+    local pages = tabs(
+        window,
+        {"Token Data", "Shops", "Settings"},
+        UDim2.new(1, -306, 0, 6),
+        UDim2.fromOffset(290, 26)
+    )
+    for _, page in pairs(pages) do
+        page.Position = UDim2.fromOffset(12, 52)
+        page.Size = U
