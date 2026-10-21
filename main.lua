@@ -300,7 +300,7 @@ do
             if type(tier) == "table" and tier.dealerEnabled ~= false then
                 order = order + 1
                 local id = tostring(tier.id)
-                crateStates[id] = {tier = tier, lastStock = nil, buying = false}
+                crateStates[id] = {tier = tier, lastStock = nil, buying = false, order = order}
 
                 local price = number(tier.priceTokens)
                 local priceText = (price ~= nil)
@@ -330,10 +330,76 @@ local function readCrateStock(id)
     return 0
 end
 
+--==================================================
+-- AUTO BUY (config widget + teleport + warp home)
+--==================================================
+local DEALER_CFRAME = CFrame.new(-342, 2.3499999, -43.7999992, 1, 0, 0, 0, 1, 0, 0, 0, 1)
+local warpRemote = remotes and remotes:WaitForChild("Warp", 10) or nil
+if not warpRemote then
+    warn("[Market Hub] Warp remote not found; cannot return home after buying.")
+end
+
+local autobuyActive = false
+local autobuySession = false
+local autobuyRows = {}
+
+local function teleportToDealer()
+    local char = player.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if hrp then
+        hrp.CFrame = DEALER_CFRAME
+        return true
+    end
+    return false
+end
+
+local function goHome()
+    if warpRemote then
+        pcall(function() warpRemote:FireServer("Home") end)
+    end
+end
+
+for id, state in pairs(crateStates) do
+    autobuyRows[id] = {enabled = false, count = 1, bought = 0}
+    view:AddAutobuyRow({
+        id = id,
+        name = tostring(state.tier.name or id),
+        order = state.order or 0,
+        count = 1,
+    })
+    view:SetAutobuyProgress(id, "0/1 bought")
+end
+
+connect(view.AutobuyRowToggled, function(id, enabled)
+    local row = autobuyRows[id]
+    if not row then return end
+    row.enabled = enabled == true
+    if row.enabled then row.bought = 0 end
+    view:SetAutobuyProgress(id, row.bought .. "/" .. row.count .. " bought")
+end)
+
+connect(view.AutobuyCountChanged, function(id, count)
+    local row = autobuyRows[id]
+    if not row then return end
+    row.count = math.clamp(math.floor(number(count) or 1), 1, 99)
+    row.bought = 0
+    view:SetAutobuyProgress(id, "0/" .. row.count .. " bought")
+end)
+
+connect(view.AutobuyMasterToggled, function(enabled)
+    autobuyActive = enabled == true
+end)
+
 local function updateCrates()
     local tokens = myTokens()
     for id, state in pairs(crateStates) do
         local amount = readCrateStock(id)
+        local autobuyRow = autobuyRows[id]
+        if autobuyRow and amount <= 0 and autobuyRow.bought > 0 then
+            -- restock gives a fresh purchase window
+            autobuyRow.bought = 0
+            view:SetAutobuyProgress(id, "0/" .. autobuyRow.count .. " bought")
+        end
         if state.lastStock ~= amount then
             state.lastStock = amount
             view:SetCrateStock(
@@ -381,6 +447,10 @@ connect(view.CrateBuy, function(id)
     updateCrates()
 
     task.spawn(function()
+        -- Teleport to the dealer so the server never rejects for distance
+        teleportToDealer()
+        task.wait(0.5)
+
         local ok, result = pcall(function()
             return blackMarketBuy:InvokeServer("crate", id)
         end)
@@ -400,8 +470,84 @@ connect(view.CrateBuy, function(id)
             view:Notify("Unexpected server response")
         end
 
+        goHome()
         updateCrates()
     end)
+end)
+
+--==================================================
+-- AUTO BUY SESSION RUNNER
+--==================================================
+local function pickAutobuyTarget()
+    if not blackMarketBuy then return nil end
+    local tokens = myTokens()
+    for id, row in pairs(autobuyRows) do
+        if row.enabled and row.bought < row.count then
+            local state = crateStates[id]
+            local price = number(state.tier.priceTokens) or 0
+            if readCrateStock(id) > 0 and tokens >= price then
+                return id
+            end
+        end
+    end
+    return nil
+end
+
+local function runAutobuySession(id)
+    if autobuySession then return end
+    autobuySession = true
+    local row = autobuyRows[id]
+    local state = crateStates[id]
+
+    view:Notify("Auto-buy: heading to dealer for " .. tostring(state.tier.name or id))
+
+    if not teleportToDealer() then
+        view:Notify("Auto-buy failed: character not loaded")
+        autobuySession = false
+        return
+    end
+    task.wait(0.5) -- let the server register our position
+
+    while alive and autobuyActive and row.enabled and row.bought < row.count do
+        if readCrateStock(id) <= 0 then break end
+        local price = number(state.tier.priceTokens) or 0
+        if myTokens() < price then break end
+
+        local ok, result = pcall(function()
+            return blackMarketBuy:InvokeServer("crate", id)
+        end)
+        if not ok then
+            view:Notify("Buy failed: " .. tostring(result))
+            break
+        end
+        if type(result) == "table" and result.ok then
+            row.bought = row.bought + 1
+            view:SetAutobuyProgress(id, row.bought .. "/" .. row.count .. " bought")
+            playSound()
+        else
+            view:Notify(tostring((type(result) == "table" and result.message) or "Can't buy"))
+            break
+        end
+        task.wait(0.7) -- pace requests to avoid rate limits
+    end
+
+    goHome()
+    autobuySession = false
+end
+
+task.spawn(function()
+    while alive do
+        local ok, err = pcall(function()
+            if autobuyActive and not autobuySession and blackMarketBuy then
+                local target = pickAutobuyTarget()
+                if target then
+                    runAutobuySession(target)
+                end
+            end
+        end)
+        if not ok then warn("[Market Hub] Auto-buy error:", err) end
+        task.wait(0.5)
+    end
 end)
 
 --==================================================
