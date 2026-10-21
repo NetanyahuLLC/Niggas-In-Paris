@@ -7,23 +7,23 @@ local downloadOK, source = pcall(function()
     return game:HttpGet(UI_URL)
 end)
 if not downloadOK then
-    error("[Market Hub] Failed to download ui.lua:\n" .. tostring(source), 0)
+    error("[Lezor] Failed to download ui.lua:\n" .. tostring(source), 0)
 end
 if type(source) ~= "string" or not source:find("%S") then
-    error("[Market Hub] GitHub returned an empty UI response.", 0)
+    error("[Lezor] GitHub returned an empty UI response.", 0)
 end
 
 local chunk, parseError = loadstring(source, "ui.lua")
 if not chunk then
-    error("[Market Hub] Downloaded ui.lua has a syntax error:\n" .. tostring(parseError), 0)
+    error("[Lezor] Downloaded ui.lua has a syntax error:\n" .. tostring(parseError), 0)
 end
 
 local executeOK, result = pcall(chunk)
 if not executeOK then
-    error("[Market Hub] ui.lua failed while executing:\n" .. tostring(result), 0)
+    error("[Lezor] ui.lua failed while executing:\n" .. tostring(result), 0)
 end
 if type(result) ~= "table" or type(result.new) ~= "function" then
-    error("[Market Hub] ui.lua did not return a valid module with UI.new(options).", 0)
+    error("[Lezor] ui.lua did not return a valid module with UI.new(options).", 0)
 end
 local UI = result
 
@@ -41,14 +41,14 @@ local player = Players.LocalPlayer
 -- FIX: Added timeouts to prevent infinite yields if the game structure changes
 local stockFolder = player:WaitForChild("ShopStock", 10)
 if not stockFolder then
-    warn("[Market Hub] ShopStock folder not found. Some features may not work.")
+    warn("[Lezor] ShopStock folder not found. Some features may not work.")
     stockFolder = Instance.new("Folder") -- Safe fallback
 end
 
 local sharedFolder = ReplicatedStorage:WaitForChild("Shared", 10)
 local Config = sharedFolder and sharedFolder:WaitForChild("Config", 10) and require(sharedFolder.Config) or {}
 if not next(Config) then
-    warn("[Market Hub] Config module not found or empty. Using empty config.")
+    warn("[Lezor] Config module not found or empty. Using empty config.")
 end
 
 local EPOCH_SECONDS = 30
@@ -189,10 +189,10 @@ if type(getcustomasset) == "function" then
     if ok and type(result) == "string" and result ~= "" then
         soundAsset = result
     else
-        warn("[Market Hub] Sound disabled:", result)
+        warn("[Lezor] Sound disabled:", result)
     end
 else
-    warn("[Market Hub] getcustomasset unavailable; sound disabled.")
+    warn("[Lezor] getcustomasset unavailable; sound disabled.")
 end
 
 local function playSound()
@@ -217,7 +217,7 @@ local function playSound()
     if not ok then
         sounds[sound] = nil
         pcall(function() sound:Destroy() end)
-        warn("[Market Hub] Playback error:", err)
+        warn("[Lezor] Playback error:", err)
     end
 end
 
@@ -296,7 +296,7 @@ end
 local remotes = ReplicatedStorage:WaitForChild("Remotes", 10)
 local blackMarketBuy = remotes and remotes:WaitForChild("BlackMarketBuy", 10) or nil
 if not blackMarketBuy then
-    warn("[Market Hub] BlackMarketBuy remote not found; crate buying disabled.")
+    warn("[Lezor] BlackMarketBuy remote not found; crate buying disabled.")
 end
 
 local crateStates = {}
@@ -324,7 +324,7 @@ do
             end
         end
     else
-        warn("[Market Hub] CrateShop tiers not found in Config.")
+        warn("[Lezor] CrateShop tiers not found in Config.")
     end
 end
 
@@ -344,8 +344,15 @@ end
 local DEALER_CFRAME = CFrame.new(-342, 2.3499999, -43.7999992, 1, 0, 0, 0, 1, 0, 0, 0, 1)
 local warpRemote = remotes and remotes:WaitForChild("Warp", 10) or nil
 if not warpRemote then
-    warn("[Market Hub] Warp remote not found; cannot return home after buying.")
+    warn("[Lezor] Warp remote not found; cannot return home after buying.")
 end
+
+local sellTokensRemote = remotes and remotes:WaitForChild("SellTokens", 10) or nil
+if not sellTokensRemote then
+    warn("[Lezor] SellTokens remote not found; auto-sell disabled.")
+end
+
+local COLLECT_CFRAME = CFrame.new(51.5, 0.625, -27.2000008, 1, 0, 0, 0, 1, 0, 0, 0, 1)
 
 local autobuyActive = false
 local autobuySession = false
@@ -396,6 +403,26 @@ end)
 
 connect(view.AutobuyMasterToggled, function(enabled)
     autobuyActive = enabled == true
+end)
+
+local autosell = {active = false, balance = nil, price = nil, busy = false, lastSell = 0}
+local SELL_COOLDOWN = 120 -- seconds between auto-sells
+connect(view.AutosellToggled, function(enabled)
+    autosell.active = enabled == true
+end)
+connect(view.AutosellBalance, function(value)
+    autosell.balance = number(value)
+end)
+connect(view.AutosellPrice, function(value)
+    autosell.price = number(value)
+end)
+
+local autocollect = {active = false, interval = 300, last = 0}
+connect(view.AutocollectToggled, function(enabled)
+    autocollect.active = enabled == true
+end)
+connect(view.AutocollectInterval, function(value)
+    autocollect.interval = math.max(10, number(value) or 300)
 end)
 
 local function updateCrates()
@@ -553,7 +580,7 @@ task.spawn(function()
                 end
             end
         end)
-        if not ok then warn("[Market Hub] Auto-buy error:", err) end
+        if not ok then warn("[Lezor] Auto-buy error:", err) end
         task.wait(0.5)
     end
 end)
@@ -620,9 +647,88 @@ end
 task.spawn(function()
     while alive do
         local ok, err = pcall(update)
-        if not ok then warn("[Market Hub] Update error:", err) end
+        if not ok then warn("[Lezor] Update error:", err) end
         task.wait(UPDATE_INTERVAL)
     end
 end)
 
-print("[Market Hub] Loaded. Press Right Shift to open or close.")
+--==================================================
+-- AUTO SELL + AUTO COLLECT RUNNER
+--==================================================
+local function performSell()
+    autosell.busy = true
+    view:Notify("Auto-sell: warping to exchange")
+
+    if warpRemote then
+        pcall(function() warpRemote:FireServer("Sell") end)
+    end
+    task.wait(1.2)
+
+    if sellTokensRemote then
+        local ok, err = pcall(function()
+            if sellTokensRemote:IsA("RemoteFunction") then
+                sellTokensRemote:InvokeServer()
+            else
+                sellTokensRemote:FireServer()
+            end
+        end)
+        if not ok then
+            view:Notify("Sell failed: " .. tostring(err))
+        end
+    end
+    task.wait(1)
+
+    if warpRemote then
+        pcall(function() warpRemote:FireServer("Home") end)
+    end
+
+    autosell.lastSell = tick()
+    autosell.busy = false
+end
+
+task.spawn(function()
+    while alive do
+        local ok, err = pcall(function()
+            local tokens = myTokens()
+            local price = number(Workspace:GetAttribute("TokenPrice"))
+
+            -- live status readout on the AutoSell card
+            view:SetAutosellStatus(
+                "Tokens: " .. formatNumber(tokens)
+                .. " | Exchange: " .. (price and ("$" .. formatNumber(price)) or "--")
+            )
+
+            -- auto sell: balance + exchange price presets must both pass
+            if autosell.active
+                and not autosell.busy
+                and not autobuySession
+                and sellTokensRemote
+                and warpRemote
+                and tick() - autosell.lastSell >= SELL_COOLDOWN then
+                local balanceOk = (autosell.balance == nil) or (tokens >= autosell.balance)
+                local priceOk = (autosell.price == nil) or (price ~= nil and price >= autosell.price)
+                if balanceOk and priceOk then
+                    task.spawn(performSell)
+                end
+            end
+
+            -- auto collect: drop 3 studs above the collect point on interval
+            if autocollect.active
+                and not autobuySession
+                and not autosell.busy
+                and tick() - autocollect.last >= autocollect.interval then
+                local char = player.Character
+                local hrp = char and char:FindFirstChild("HumanoidRootPart")
+                if hrp then
+                    hrp.CFrame = COLLECT_CFRAME + Vector3.new(0, 3, 0)
+                    autocollect.last = tick()
+                    view:Notify("Auto-collect: dropped at collect point")
+                end
+            end
+        end)
+        if not ok then warn("[Lezor] Sell/collect error:", err) end
+        task.wait(1)
+    end
+end)
+
+print("[Lezor] Loaded. Press Right Shift to open or close.")
