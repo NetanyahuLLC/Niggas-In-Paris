@@ -1,6 +1,7 @@
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
 
 local UI = {}
 
@@ -10,6 +11,7 @@ function UI.new(options)
         alive = true,
         connections = {},
         rows = {},
+        crateRows = {},
         queue = {},
         tweens = {},
     }
@@ -36,7 +38,6 @@ function UI.new(options)
     end
 
     local function card(parent, props)
-        props = props or {}
         props.BackgroundColor3 = props.BackgroundColor3 or colors.card
         props.BorderSizePixel = 0
         local obj = make("Frame", parent, props)
@@ -58,7 +59,7 @@ function UI.new(options)
             TextXAlignment = Enum.TextXAlignment.Left,
             TextTruncate = Enum.TextTruncate.AtEnd,
         }
-        for key, value in pairs(props or {}) do defaults[key] = value end
+        for key, value in pairs(props) do defaults[key] = value end
         return make("TextLabel", parent, defaults)
     end
 
@@ -68,31 +69,14 @@ function UI.new(options)
         return connection
     end
 
-    -- FIX: Track one tween per object so new animations cancel old ones
-    local objTweens = {}
-
-    local function cancelTween(obj)
-        local existing = objTweens[obj]
-        if existing then
-            objTweens[obj] = nil
-            self.tweens[existing] = nil
-            pcall(function() existing:Cancel() end)
-        end
-    end
-
     local function tween(obj, duration, props)
-        cancelTween(obj)
         local animation = TweenService:Create(
             obj,
             TweenInfo.new(duration, Enum.EasingStyle.Quint, Enum.EasingDirection.Out),
             props
         )
         self.tweens[animation] = true
-        objTweens[obj] = animation
-        animation.Completed:Once(function()
-            self.tweens[animation] = nil
-            if objTweens[obj] == animation then objTweens[obj] = nil end
-        end)
+        animation.Completed:Once(function() self.tweens[animation] = nil end)
         animation:Play()
         return animation
     end
@@ -114,10 +98,12 @@ function UI.new(options)
     local toggled = Instance.new("BindableEvent")
     local shown = Instance.new("BindableEvent")
     local soundToggled = Instance.new("BindableEvent")
+    local crateBuy = Instance.new("BindableEvent")
     self.Destroyed = destroyed.Event
     self.AlertToggled = toggled.Event
     self.NotificationShown = shown.Event
     self.SoundToggled = soundToggled.Event
+    self.CrateBuy = crateBuy.Event
 
     local window = card(gui, {
         Name = "MainWindow",
@@ -149,40 +135,36 @@ function UI.new(options)
         Size = UDim2.fromOffset(95, 14),
     })
 
-    -- FIX: tabs() no longer auto-selects. It returns (pages, select) so the
-    -- caller can apply layout positions FIRST, then animate. Each page also
-    -- remembers its "home" position so animations never override layout.
+    -- Tab pages keep a caller-assigned "home" position; switching tabs
+    -- tweens relative to home instead of clobbering the layout.
     local function tabs(parentObj, names, position, size)
         local bar = card(parentObj, {
             Position = position,
             Size = size,
             BackgroundColor3 = colors.panel,
         })
-        local buttons, pages, homes = {}, {}, {}
+        local buttons, pages = {}, {}
+        local home = {}
         local activeName
 
         local function select(name)
             if activeName == name then return end
             activeName = name
             for key, button in pairs(buttons) do
-                local selected = (key == name)
+                local selected = key == name
                 tween(button, 0.16, {
                     BackgroundColor3 = selected and colors.white or colors.panel,
                     TextColor3 = selected and colors.background or colors.secondary,
                 })
                 local page = pages[key]
                 if selected then
-                    local home = homes[page] or page.Position
-                    homes[page] = home
-                    cancelTween(page)
+                    if not home[page] then
+                        home[page] = page.Position
+                    end
                     page.Visible = true
-                    page.Position = UDim2.new(
-                        home.X.Scale, home.X.Offset,
-                        home.Y.Scale, home.Y.Offset + 6
-                    )
-                    tween(page, 0.20, {Position = home})
+                    page.Position = home[page] + UDim2.fromOffset(0, 5)
+                    tween(page, 0.20, {Position = home[page]})
                 else
-                    cancelTween(page)
                     page.Visible = false
                 end
             end
@@ -212,9 +194,10 @@ function UI.new(options)
         return pages, select
     end
 
-    local pages, selectPage = tabs(
+    -- Layout first, then select, so "home" is captured correctly.
+    local pages, selectMainTab = tabs(
         window,
-        {"Token Data", "Shops", "Settings"},
+        {"Market", "Shops", "Crates", "Settings"},
         UDim2.new(1, -306, 0, 6),
         UDim2.fromOffset(290, 26)
     )
@@ -222,7 +205,7 @@ function UI.new(options)
         page.Position = UDim2.fromOffset(12, 52)
         page.Size = UDim2.new(1, -24, 1, -64)
     end
-    selectPage("Token Data")
+    selectMainTab("Market")
 
     local function info(parentObj, name, y)
         local box = card(parentObj, {
@@ -245,11 +228,11 @@ function UI.new(options)
         })
     end
 
-    local priceLabel = info(pages["Token Data"], "Current Token Price", 0)
-    local epochLabel = info(pages["Token Data"], "Next Price Switch", 56)
+    local priceLabel = info(pages.Market, "Current Token Price", 0)
+    local epochLabel = info(pages.Market, "Next Price Switch", 56)
     local restockLabel = info(pages.Shops, "Shop Restock", 0)
 
-    local shops, selectShop = tabs(
+    local shopPages, selectShopTab = tabs(
         pages.Shops,
         {"Hardware", "Data Sources", "Data Packs"},
         UDim2.fromOffset(0, 56),
@@ -257,7 +240,7 @@ function UI.new(options)
     )
 
     local lists = {}
-    for name, page in pairs(shops) do
+    for name, page in pairs(shopPages) do
         page.Position = UDim2.fromOffset(0, 94)
         page.Size = UDim2.new(1, 0, 1, -94)
         local list = make("ScrollingFrame", page, {
@@ -274,7 +257,84 @@ function UI.new(options)
         })
         lists[name] = list
     end
-    selectShop("Hardware")
+    selectShopTab("Hardware")
+
+    -- Crates page (black market stock + buy buttons)
+    local crateList = make("ScrollingFrame", pages.Crates, {
+        Size = UDim2.fromScale(1, 1),
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        ScrollBarThickness = 3,
+        CanvasSize = UDim2.new(),
+        AutomaticCanvasSize = Enum.AutomaticSize.Y,
+    })
+    make("UIListLayout", crateList, {
+        Padding = UDim.new(0, 6),
+        SortOrder = Enum.SortOrder.LayoutOrder,
+    })
+    label(pages.Crates, {
+        Text = "DEALER STOCK / SMUGGLED CRATES",
+        TextSize = 9,
+        Position = UDim2.fromOffset(0, -16),
+        Size = UDim2.new(1, 0, 0, 14),
+    })
+
+    function self:AddCrate(item)
+        local row = card(crateList, {
+            Size = UDim2.new(1, -5, 0, 50),
+            LayoutOrder = item.order,
+        })
+        label(row, {
+            Text = item.name,
+            TextColor3 = colors.white,
+            TextSize = 11,
+            Position = UDim2.fromOffset(12, 5),
+            Size = UDim2.new(0.5, -20, 0, 18),
+        })
+        label(row, {
+            Text = item.priceText,
+            TextSize = 10,
+            Position = UDim2.fromOffset(12, 27),
+            Size = UDim2.new(0.5, -20, 0, 15),
+        })
+        local stock = label(row, {
+            Text = "Stock: 0",
+            TextSize = 10,
+            Position = UDim2.new(0.5, 0, 0, 0),
+            Size = UDim2.new(0.2, -6, 1, 0),
+        })
+        local buy = make("TextButton", row, {
+            Text = "BUY",
+            TextSize = 9,
+            Font = Enum.Font.GothamMedium,
+            BackgroundColor3 = colors.white,
+            TextColor3 = colors.background,
+            AutoButtonColor = false,
+            BorderSizePixel = 0,
+            Position = UDim2.new(1, -84, 0.5, -12),
+            Size = UDim2.fromOffset(76, 25),
+        })
+        corner(buy, 5)
+        self.crateRows[item.id] = {stock = stock, buy = buy}
+        connect(buy.Activated, function() crateBuy:Fire(item.id) end)
+    end
+
+    function self:SetCrateStock(id, text, available)
+        local row = self.crateRows[id]
+        if not row then return end
+        row.stock.Text = text
+        row.stock.TextColor3 = available and colors.white or colors.muted
+    end
+
+    function self:SetCrateBuy(id, text, canBuy)
+        local row = self.crateRows[id]
+        if not row then return end
+        row.buy.Text = text
+        row.buy.BackgroundColor3 = canBuy and colors.white or colors.panel
+        row.buy.TextColor3 = canBuy and colors.background or colors.muted
+        row.buy.AutoButtonColor = canBuy
+        row.buy.Active = canBuy
+    end
 
     function self:AddItem(category, item)
         assert(lists[category], "Unknown UI category: " .. tostring(category))
@@ -368,9 +428,8 @@ function UI.new(options)
         Size = UDim2.fromOffset(88, 26),
     })
     corner(soundButton, 5)
-    local soundEnabled = true
     connect(soundButton.Activated, function()
-        soundEnabled = not soundEnabled
+        local soundEnabled = soundButton.Text == "SOUND OFF"
         soundButton.Text = soundEnabled and "SOUND ON" or "SOUND OFF"
         soundButton.BackgroundColor3 = soundEnabled and colors.white or colors.panel
         soundButton.TextColor3 = soundEnabled and colors.background or colors.secondary
@@ -410,21 +469,20 @@ function UI.new(options)
     -- Bottom-right notification; queued so each stays visible for two seconds.
     local banner = card(gui, {
         AnchorPoint = Vector2.new(1, 1),
-        Size = UDim2.new(1, -36, 0, 76),
+        Size = UDim2.fromOffset(400, 76),
         Position = UDim2.new(1, -18, 1, -18),
         Visible = false,
         BackgroundColor3 = colors.panel,
         ZIndex = 50,
     })
-    make("UISizeConstraint", banner, {MaxSize = Vector2.new(400, 76)})
-    make("Frame", banner, {
+    local indicator = make("Frame", banner, {
         BackgroundColor3 = colors.white,
         BorderSizePixel = 0,
         Position = UDim2.fromOffset(10, 10),
         Size = UDim2.new(0, 4, 1, -20),
         ZIndex = 51,
     })
-    corner(banner, 6)
+    corner(indicator, 2)
     label(banner, {
         Text = "MARKET ALERT",
         Font = Enum.Font.GothamBold,
@@ -454,7 +512,6 @@ function UI.new(options)
         task.spawn(function()
             while self.alive and #self.queue > 0 do
                 message.Text = table.remove(self.queue, 1)
-                cancelTween(banner)
                 banner.Position = UDim2.new(1, 430, 1, -18)
                 banner.Visible = true
                 shown:Fire()
@@ -485,35 +542,20 @@ function UI.new(options)
         end
     end)
 
-    -- FIX: Don't start dragging when the press begins on an interactive
-    -- control (buttons, scrollbars, text boxes), otherwise clicking them
-    -- would drag the window instead.
-    local function dragBlockedAt(position)
-        local root = parent
-        if type(root.GetGuiObjectsAtPosition) ~= "function" then
-            root = Players.LocalPlayer:WaitForChild("PlayerGui")
-        end
-        local node = root:GetGuiObjectsAtPosition(position.X, position.Y)[1]
-        while node and node ~= window and node ~= gui do
-            if node:IsA("TextButton") or node:IsA("ScrollingFrame") or node:IsA("TextBox") then
-                return true
-            end
-            node = node.Parent
-        end
-        return false
-    end
-
+    -- Smooth drag: input updates a target position, RenderStepped eases the
+    -- window toward it. This kills the jitter from event-driven repositioning.
     local dragging = false
-    local dragStart = Vector2.new(0, 0)
-    local startPosition = UDim2.new(0, 0, 0, 0)
+    local dragStart = Vector2.zero
+    local startPosition = UDim2.new()
+    local targetPosition = UDim2.new()
 
     connect(window.InputBegan, function(input)
         if input.UserInputType == Enum.UserInputType.MouseButton1
             or input.UserInputType == Enum.UserInputType.Touch then
-            if dragBlockedAt(input.Position) then return end
             dragging = true
             dragStart = input.Position
             startPosition = window.Position
+            targetPosition = window.Position
         end
     end)
 
@@ -522,7 +564,7 @@ function UI.new(options)
             and (input.UserInputType == Enum.UserInputType.MouseMovement
                 or input.UserInputType == Enum.UserInputType.Touch) then
             local delta = input.Position - dragStart
-            window.Position = UDim2.new(
+            targetPosition = UDim2.new(
                 startPosition.X.Scale, startPosition.X.Offset + delta.X,
                 startPosition.Y.Scale, startPosition.Y.Offset + delta.Y
             )
@@ -533,6 +575,13 @@ function UI.new(options)
         if input.UserInputType == Enum.UserInputType.MouseButton1
             or input.UserInputType == Enum.UserInputType.Touch then
             dragging = false
+        end
+    end)
+
+    connect(RunService.RenderStepped, function(dt)
+        if dragging then
+            local alpha = math.clamp(dt * 24, 0, 1)
+            window.Position = window.Position:Lerp(targetPosition, alpha)
         end
     end)
 
@@ -551,14 +600,13 @@ function UI.new(options)
         for animation in pairs(self.tweens) do
             pcall(function() animation:Cancel() end)
         end
-        table.clear(self.tweens)
-        table.clear(objTweens)
         table.clear(self.queue)
         task.defer(function()
             destroyed:Destroy()
             toggled:Destroy()
             shown:Destroy()
             soundToggled:Destroy()
+            crateBuy:Destroy()
         end)
     end)
 
