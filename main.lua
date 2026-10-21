@@ -395,6 +395,39 @@ end
 
 local COLLECT_CFRAME = CFrame.new(51.5, 0.625, -27.2000008, 1, 0, 0, 0, 1, 0, 0, 0, 1)
 
+-- Resolve the local player's plot via the PlotId attribute (same mechanism
+-- as the game's PlotOwnerBillboard client), then return a drop CFrame 3
+-- studs above the top of that plot's CollectPad model.
+local function findCollectDropCFrame()
+    local plotId = player:GetAttribute("PlotId")
+    local map = Workspace:FindFirstChild("Map")
+    local generated = map and map:FindFirstChild("Generated")
+    local plots = generated and generated:FindFirstChild("Plots")
+
+    if typeof(plotId) == "number" and plots then
+        for _, plot in ipairs(plots:GetChildren()) do
+            if plot:GetAttribute("PlotId") == plotId then
+                local pad = plot:FindFirstChild("CollectPad")
+                if pad then
+                    if pad:IsA("BasePart") then
+                        return CFrame.new(pad.Position + Vector3.new(0, pad.Size.Y / 2 + 3, 0))
+                            * (pad.CFrame - pad.CFrame.Position)
+                    end
+                    local ok, cf, size = pcall(function()
+                        return pad:GetBoundingBox()
+                    end)
+                    if ok and cf then
+                        return CFrame.new(cf.Position + Vector3.new(0, (size.Y or 0) / 2 + 3, 0))
+                            * (cf - cf.Position)
+                    end
+                end
+            end
+        end
+    end
+
+    return nil -- plot/pad not found yet
+end
+
 local autobuyActive = false
 local autobuySession = false
 local autobuyRows = {}
@@ -747,7 +780,7 @@ task.spawn(function()
                 end
             end
 
-            -- auto collect: drop 3 studs above the collect point on interval
+            -- auto collect: drop onto your plot's CollectPad on interval
             if autocollect.active
                 and not autobuySession
                 and not autosell.busy
@@ -755,15 +788,28 @@ task.spawn(function()
                 local char = player.Character
                 local hrp = char and char:FindFirstChild("HumanoidRootPart")
                 if hrp then
-                    hrp.CFrame = COLLECT_CFRAME + Vector3.new(0, 3, 0)
-                    autocollect.last = tick()
-                    view:Notify("Auto-collect: dropped at collect point")
-                    -- land, collect, then head home
-                    task.delay(3, function()
-                        if alive and warpRemote then
-                            pcall(function() warpRemote:FireServer("Home") end)
-                        end
-                    end)
+                    local drop = findCollectDropCFrame()
+                    if drop then
+                        hrp.CFrame = drop
+                        autocollect.last = tick()
+                        view:Notify("Auto-collect: dropped on your CollectPad")
+                        -- land, collect, then head home
+                        task.delay(3, function()
+                            if alive and warpRemote then
+                                pcall(function() warpRemote:FireServer("Home") end)
+                            end
+                        end)
+                    else
+                        -- plot or CollectPad not resolved yet; retry next tick
+                        hrp.CFrame = COLLECT_CFRAME + Vector3.new(0, 3, 0)
+                        autocollect.last = tick()
+                        view:Notify("Auto-collect: plot not found, using fallback spot")
+                        task.delay(3, function()
+                            if alive and warpRemote then
+                                pcall(function() warpRemote:FireServer("Home") end)
+                            end
+                        end)
+                    end
                 end
             end
         end)
