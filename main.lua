@@ -1,187 +1,87 @@
+-- Token Market Hub
+-- Price-change notifications, optional neverlose.wav sound, and stock alerts.
+
 --==================================================
 -- LOAD UI MODULE FROM GITHUB
 --==================================================
-local UI_URL =
-    "https://raw.githubusercontent.com/NetanyahuLLC/Niggas-In-Paris/refs/heads/main/ui.lua"
-
-local downloadOK, source = pcall(function()
-    return game:HttpGet(UI_URL)
-end)
-
-if not downloadOK then
-    error(
-        "[Market Hub] Failed to download ui.lua:\n"
-        .. tostring(source),
-        0
-    )
-end
-
-if type(source) ~= "string" or not source:find("%S") then
-    error("[Market Hub] GitHub returned an empty UI response.", 0)
-end
-
+local UI_URL = "https://raw.githubusercontent.com/NetanyahuLLC/Niggas-In-Paris/refs/heads/main/ui.lua"
+local downloadOK, source = pcall(function() return game:HttpGet(UI_URL) end)
+if not downloadOK then error("[Market Hub] Failed to download ui.lua:\n" .. tostring(source), 0) end
+if type(source) ~= "string" or not source:find("%S") then error("[Market Hub] GitHub returned an empty UI response.", 0) end
 local chunk, parseError = loadstring(source, "ui.lua")
-
-if not chunk then
-    error(
-        "[Market Hub] Downloaded ui.lua has a syntax error:\n"
-        .. tostring(parseError),
-        0
-    )
-end
-
+if not chunk then error("[Market Hub] Downloaded ui.lua has a syntax error:\n" .. tostring(parseError), 0) end
 local executeOK, result = pcall(chunk)
-
-if not executeOK then
-    error(
-        "[Market Hub] ui.lua failed while executing:\n"
-        .. tostring(result),
-        0
-    )
+if not executeOK then error("[Market Hub] ui.lua failed while executing:\n" .. tostring(result), 0) end
+if type(result) ~= "table" or type(result.new) ~= "function" then
+    error("[Market Hub] ui.lua must return a module table containing UI.new(options).", 0)
 end
-
-if type(result) ~= "table" then
-    error(
-        "[Market Hub] Downloaded ui.lua returned "
-        .. type(result)
-        .. ", not a module table. "
-        .. "Commit the complete UI module to GitHub, "
-        .. "including its final 'return UI' line.",
-        0
-    )
-end
-
-if type(result.new) ~= "function" then
-    error(
-        "[Market Hub] ui.lua returned a table, but UI.new is "
-        .. type(result.new)
-        .. ". Check that the GitHub file contains "
-        .. "'function UI.new(options)'.",
-        0
-    )
-end
-
 local UI = result
 
 --==================================================
--- GAME SERVICES / CONFIGURATION
+-- SERVICES / CONFIGURATION
 --==================================================
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local SoundService = game:GetService("SoundService")
 local Debris = game:GetService("Debris")
-
 local player = Players.LocalPlayer
 local stockFolder = player:WaitForChild("ShopStock")
-local Config = require(
-    ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Config")
-)
+local Config = require(ReplicatedStorage:WaitForChild("Shared"):WaitForChild("Config"))
 
 local EPOCH_SECONDS = 30
 local UPDATE_INTERVAL = 1
 local SOUND_FILE = "neverlose.wav"
 local SOUND_VOLUME = 1
-local SOUND_PRICE = 13
 
 --==================================================
--- DATA HELPERS
+-- HELPERS
 --==================================================
 local function number(value)
     local n = tonumber(value)
-
-    if n
-        and n == n
-        and n ~= math.huge
-        and n ~= -math.huge then
-        return n
-    end
+    if n and n == n and n ~= math.huge and n ~= -math.huge then return n end
 end
 
 local function formatNumber(value)
     local n = number(value)
-
-    if not n then
-        return "N/A"
-    end
-
-    if n % 1 == 0 then
-        return tostring(math.floor(n))
-    end
-
-    local text = string.format("%.2f", n)
-        :gsub("0+$", "")
-        :gsub("%.$", "")
-
-    return text
+    if not n then return "N/A" end
+    if n % 1 == 0 then return tostring(math.floor(n)) end
+    return string.format("%.2f", n):gsub("0+$", ""):gsub("%.$", "")
 end
 
 local function seconds(value)
     value = math.max(0, math.floor(value))
-
-    if value >= 60 then
-        return string.format(
-            "%dm %02ds",
-            math.floor(value / 60),
-            value % 60
-        )
-    end
-
+    if value >= 60 then return string.format("%dm %02ds", math.floor(value / 60), value % 60) end
     return tostring(value) .. "s"
 end
 
 local function priceOf(data)
     for _, key in ipairs({"cost", "Cost", "price", "Price"}) do
         local n = number(data[key])
-        if n and n >= 0 then
-            return n
-        end
+        if n and n >= 0 then return n end
     end
 end
 
 local function sortedItems(dict)
     local items = {}
-
-    if type(dict) ~= "table" then
-        return items
-    end
-
+    if type(dict) ~= "table" then return items end
     for key, data in pairs(dict) do
         if type(data) == "table" then
-            table.insert(items, {
-                key = tostring(key),
-                name = tostring(data.name or key),
-                price = priceOf(data),
-            })
+            table.insert(items, {key = tostring(key), name = tostring(data.name or key), price = priceOf(data)})
         end
     end
-
     table.sort(items, function(a, b)
-        if a.price == nil and b.price ~= nil then
-            return false
-        end
-
-        if a.price ~= nil and b.price == nil then
-            return true
-        end
-
-        if a.price ~= nil and b.price ~= nil
-            and a.price ~= b.price then
-            return a.price < b.price
-        end
-
-        if a.name:lower() == b.name:lower() then
-            return a.key < b.key
-        end
-
+        if a.price == nil and b.price ~= nil then return false end
+        if a.price ~= nil and b.price == nil then return true end
+        if a.price ~= nil and b.price ~= nil and a.price ~= b.price then return a.price < b.price end
+        if a.name:lower() == b.name:lower() then return a.key < b.key end
         return a.name:lower() < b.name:lower()
     end)
-
     return items
 end
 
 --==================================================
--- UI / LIFECYCLE
+-- CREATE UI / LIFECYCLE
 --==================================================
 local view = UI.new({
     Name = "TokenMarketHub",
@@ -193,6 +93,7 @@ local alive = true
 local connections = {}
 local sounds = {}
 local states = {}
+local soundEnabled = true
 
 local function connect(signal, callback)
     local connection = signal:Connect(callback)
@@ -200,108 +101,73 @@ local function connect(signal, callback)
     return connection
 end
 
-connect(view.Destroyed, function()
-    alive = false
-
-    for _, connection in ipairs(connections) do
-        connection:Disconnect()
-    end
-
-    for sound in pairs(sounds) do
-        sound:Destroy()
-    end
-
-    table.clear(connections)
-    table.clear(sounds)
-end)
-
 --==================================================
 -- SOUND
 --==================================================
 local soundAsset
-
 if type(getcustomasset) == "function" then
-    local ok, result = pcall(function()
-        if type(isfile) == "function"
-            and not isfile(SOUND_FILE) then
-            error(
-                "Missing executor workspace file: "
-                .. SOUND_FILE
-            )
+    local ok, resultAsset = pcall(function()
+        if type(isfile) == "function" and not isfile(SOUND_FILE) then
+            error("Missing executor workspace file: " .. SOUND_FILE)
         end
-
         return getcustomasset(SOUND_FILE)
     end)
-
-    if ok and type(result) == "string" and result ~= "" then
-        soundAsset = result
+    if ok and type(resultAsset) == "string" and resultAsset ~= "" then
+        soundAsset = resultAsset
     else
-        warn("[Market Hub] Sound disabled:", result)
+        warn("[Market Hub] Sound unavailable:", resultAsset)
     end
 else
     warn("[Market Hub] getcustomasset unavailable; sound disabled.")
 end
 
 local function playSound()
-    if not alive or not soundAsset then
-        return
-    end
-
+    if not alive or not soundEnabled or not soundAsset then return end
     local sound = Instance.new("Sound")
-    sound.Name = "MarketHubHitSound"
+    sound.Name = "MarketHubPriceChangeSound"
     sound.SoundId = soundAsset
     sound.Volume = SOUND_VOLUME
     sound.Parent = SoundService
     sounds[sound] = true
-
-    sound.Destroying:Once(function()
-        sounds[sound] = nil
-    end)
-
-    sound.Ended:Once(function()
-        sound:Destroy()
-    end)
-
+    sound.Destroying:Once(function() sounds[sound] = nil end)
+    sound.Ended:Once(function() sound:Destroy() end)
     Debris:AddItem(sound, 30)
-
-    local ok, err = pcall(function()
-        sound:Play()
-    end)
-
+    local ok, err = pcall(function() sound:Play() end)
     if not ok then
+        sounds[sound] = nil
         sound:Destroy()
         warn("[Market Hub] Playback error:", err)
     end
 end
 
-connect(view.NotificationShown, playSound)
+connect(view.SoundToggled, function(enabled)
+    soundEnabled = enabled == true
+    view:SetSoundEnabled(soundEnabled)
+end)
+
+connect(view.Destroyed, function()
+    alive = false
+    for _, connection in ipairs(connections) do connection:Disconnect() end
+    for sound in pairs(sounds) do sound:Destroy() end
+    table.clear(connections)
+    table.clear(sounds)
+end)
 
 --==================================================
 -- STOCK / ALERTS
 --==================================================
 local function readStock(id)
     local value = stockFolder:FindFirstChild(id)
-
-    if value and value:IsA("ValueBase") then
-        return number(value.Value) or 0
-    end
-
+    if value and value:IsA("ValueBase") then return number(value.Value) or 0 end
     return 0
 end
 
 local function checkAlert(id, amount)
     local state = states[id]
-    if not state or not state.enabled then
-        return
-    end
-
+    if not state or not state.enabled then return end
     if amount > 0 and not state.alerted then
         state.alerted = true
-        view:Notify(
-            state.name
-            .. " is available  |  Stock: "
-            .. formatNumber(amount)
-        )
+        view:Notify(state.name .. " is available  |  Stock: " .. formatNumber(amount), "STOCK ALERT")
     elseif amount <= 0 then
         state.alerted = false
     end
@@ -310,14 +176,10 @@ end
 connect(view.AlertToggled, function(id)
     local state = states[id]
     if not state then return end
-
     state.enabled = not state.enabled
     state.alerted = false
     view:SetAlertEnabled(id, state.enabled)
-
-    if state.enabled then
-        checkAlert(id, readStock(id))
-    end
+    if state.enabled then checkAlert(id, readStock(id)) end
 end)
 
 for _, category in ipairs({
@@ -327,90 +189,60 @@ for _, category in ipairs({
 }) do
     for index, item in ipairs(sortedItems(category.data)) do
         local id = item.name
-        states[id] = states[id] or {
-            name = item.name,
-            enabled = false,
-            alerted = false,
-        }
-
+        states[id] = states[id] or {name = item.name, enabled = false, alerted = false}
         local priceText = "Cost: N/A"
-
-        if item.price == 0 then
-            priceText = "Cost: Free"
-        elseif item.price ~= nil then
-            priceText = "Cost: $" .. formatNumber(item.price)
-        end
-
-        view:AddItem(category.name, {
-            id = id,
-            name = item.name,
-            order = index,
-            priceText = priceText,
-        })
+        if item.price == 0 then priceText = "Cost: Free"
+        elseif item.price ~= nil then priceText = "Cost: $" .. formatNumber(item.price) end
+        view:AddItem(category.name, {id = id, name = item.name, order = index, priceText = priceText})
     end
 end
 
 --==================================================
--- TOKEN PRICE
+-- TOKEN PRICE: notify and play sound on EVERY actual price change
 --==================================================
 local lastPrice = number(Workspace:GetAttribute("TokenPrice"))
 
-local function updatePrice(allowSound)
+local function updatePrice(notifyChange)
     if not alive then return end
-
     local price = number(Workspace:GetAttribute("TokenPrice"))
-    view:SetTokenPrice(
-        price ~= nil and ("$" .. formatNumber(price)) or "--"
-    )
+    view:SetTokenPrice(price ~= nil and ("$" .. formatNumber(price)) or "--")
 
-    if allowSound
-        and price == SOUND_PRICE
-        and lastPrice ~= SOUND_PRICE then
+    if notifyChange and price ~= nil and lastPrice ~= nil and price ~= lastPrice then
+        local delta = price - lastPrice
+        local direction = delta > 0 and "increased" or "decreased"
+        local sign = delta > 0 and "+" or ""
+        local message = string.format("Token price %s: $%s → $%s (%s$%s)",
+            direction, formatNumber(lastPrice), formatNumber(price), sign, formatNumber(math.abs(delta)))
+        view:Notify(message, "TOKEN PRICE CHANGE")
+        playSound()
+    elseif notifyChange and price ~= nil and lastPrice == nil then
+        view:Notify("Token price is now $" .. formatNumber(price), "TOKEN PRICE UPDATE")
         playSound()
     end
-
     lastPrice = price
 end
 
-connect(
-    Workspace:GetAttributeChangedSignal("TokenPrice"),
-    function()
-        updatePrice(true)
-    end
-)
-
+connect(Workspace:GetAttributeChangedSignal("TokenPrice"), function()
+    updatePrice(true)
+end)
 updatePrice(false)
 
 --==================================================
--- PERIODIC UPDATE
+-- PERIODIC UI / STOCK UPDATE
 --==================================================
 local function update()
     local now = Workspace:GetServerTimeNow()
-    view:SetEpochTimer(
-        seconds(EPOCH_SECONDS - math.floor(now) % EPOCH_SECONDS)
-    )
-
+    view:SetEpochTimer(seconds(EPOCH_SECONDS - math.floor(now) % EPOCH_SECONDS))
     local restock = stockFolder:FindFirstChild("RestockAt")
-    local at = restock
-        and restock:IsA("ValueBase")
-        and number(restock.Value)
-
-    view:SetRestockTimer(
-        at and seconds(math.max(0, math.ceil(at - now))) or "--"
-    )
+    local at = restock and restock:IsA("ValueBase") and number(restock.Value)
+    view:SetRestockTimer(at and seconds(math.max(0, math.ceil(at - now))) or "--")
 
     for id, state in pairs(states) do
         local amount = readStock(id)
-
         if state.lastStock ~= amount then
             state.lastStock = amount
-            view:SetStock(
-                id,
-                "Stock: " .. formatNumber(amount),
-                amount > 0
-            )
+            view:SetStock(id, "Stock: " .. formatNumber(amount), amount > 0)
         end
-
         checkAlert(id, amount)
     end
 end
@@ -418,11 +250,7 @@ end
 task.spawn(function()
     while alive do
         local ok, err = pcall(update)
-
-        if not ok then
-            warn("[Market Hub] Update error:", err)
-        end
-
+        if not ok then warn("[Market Hub] Update error:", err) end
         task.wait(UPDATE_INTERVAL)
     end
 end)
