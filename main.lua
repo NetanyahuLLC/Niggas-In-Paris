@@ -96,6 +96,45 @@ local SOUND_FILE = "neverlose.wav"
 local SOUND_VOLUME = 1
 
 --==================================================
+-- SETTINGS CACHE (executor file IO, memory fallback)
+--==================================================
+local CACHE_FILE = "lezor_settings.json"
+local persist -- forward declaration; assigned after autobuy state exists
+
+local function loadSettings()
+    if type(isfile) ~= "function" or type(readfile) ~= "function" then
+        return {}
+    end
+    local ok, data = pcall(function()
+        if not isfile(CACHE_FILE) then return nil end
+        return readfile(CACHE_FILE)
+    end)
+    if not ok or type(data) ~= "string" or not data:find("%S") then
+        return {}
+    end
+    local okJ, result = pcall(function()
+        return game:GetService("HttpService"):JSONDecode(data)
+    end)
+    if okJ and type(result) == "table" then
+        return result
+    end
+    return {}
+end
+
+local function writeSettings(settings)
+    if type(writefile) ~= "function" then return false end
+    local okJ, data = pcall(function()
+        return game:GetService("HttpService"):JSONEncode(settings)
+    end)
+    if not okJ or type(data) ~= "string" then return false end
+    local ok = pcall(function() writefile(CACHE_FILE, data) end)
+    if ok then
+        log("settings cached")
+    end
+    return ok == true
+end
+
+--==================================================
 -- DATA HELPERS
 --==================================================
 local function number(value)
@@ -279,7 +318,7 @@ local function checkAlert(id, amount)
 
     if amount > 0 and not state.alerted then
         state.alerted = true
-        view:Notify(state.name .. " is available  |  Stock: " .. formatNumber(amount))
+        view:Notify("STOCK ALERT", state.name .. " is available  |  Stock: " .. formatNumber(amount))
     elseif amount <= 0 then
         state.alerted = false
     end
@@ -297,6 +336,7 @@ end)
 connect(view.SoundToggled, function(enabled)
     soundEnabled = enabled == true
     if not soundEnabled then stopSounds() end
+    if persist then persist() end
 end)
 
 for _, category in ipairs({
@@ -390,7 +430,23 @@ end
 
 local sellTokensRemote = remotes and remotes:WaitForChild("SellTokens", 10) or nil
 if not sellTokensRemote then
-    warn("[Lezor] SellTokens remote not found; auto-sell disabled.")
+    warn("[Lezor] SellTokens remote not found yet; will retry automatically.")
+end
+
+-- Re-resolve on every check: remotes can replicate in late, and a one-shot
+-- WaitForChild timeout would otherwise disable auto-sell for the whole session.
+local function getSellRemote()
+    if sellTokensRemote and sellTokensRemote.Parent then return sellTokensRemote end
+    if not remotes then remotes = ReplicatedStorage:FindFirstChild("Remotes") end
+    if remotes then sellTokensRemote = remotes:FindFirstChild("SellTokens") end
+    return sellTokensRemote
+end
+
+local function getWarpRemote()
+    if warpRemote and warpRemote.Parent then return warpRemote end
+    if not remotes then remotes = ReplicatedStorage:FindFirstChild("Remotes") end
+    if remotes then warpRemote = remotes:FindFirstChild("Warp") end
+    return warpRemote
 end
 
 local COLLECT_CFRAME = CFrame.new(51.5, 0.625, -27.2000008, 1, 0, 0, 0, 1, 0, 0, 0, 1)
@@ -449,9 +505,62 @@ local function goHome()
 end
 
 for id, state in pairs(crateStates) do
-    autobuyRows[id] = {enabled = false, count = 1, bought = 0}
+    autobuyRows[id] = enabled = false, count = 1, bought = 0}
     view:SetAutobuyProgress(id, "0/1 bought")
 end
+
+--==================================================
+-- SETTINGS PERSISTENCE
+--==================================================
+local settings = loadSettings()
+
+persist = function()
+    local crates = {}
+    for id, row in pairs(autobuyRows) do
+        crates[id] = {enabled = row.enabled, count = row.count}
+    end
+    settings.sound = soundEnabled
+    settings.autosell = {enabled = autosell.active, balance = autosell.balance, price = autosell.price}
+    settings.autocollect = {enabled = autocollect.active, interval = autocollect.interval}
+    settings.autobuy = {master = autobuyActive, crates = crates}
+    writeSettings(settings)
+end
+
+-- restore cached state onto the widgets
+if settings.sound == false then
+    soundEnabled = false
+    view:SetSoundEnabled(false)
+end
+if type(settings.autosell) == "table" then
+    autosell.active = settings.autosell.enabled == true
+    autosell.balance = number(settings.autosell.balance)
+    autosell.price = number(settings.autosell.price)
+    view:SetAutosellEnabled(autosell.active)
+    view:SetAutosellBalance(autosell.balance)
+    view:SetAutosellPrice(autosell.price)
+end
+if type(settings.autocollect) == "table" then
+    autocollect.active = settings.autocollect.enabled == true
+    autocollect.interval = math.max(10, number(settings.autocollect.interval) or 300)
+    view:SetAutocollectEnabled(autocollect.active)
+    view:SetAutocollectInterval(autocollect.interval)
+end
+if type(settings.autobuy) == "table" then
+    autobuyActive = settings.autobuy.master == true
+    view:SetAutobuyMaster(autobuyActive)
+    if type(settings.autobuy.crates) == "table" then
+        for id, cfg in pairs(settings.autobuy.crates) do
+            local row = autobuyRows[id]
+            if row and type(cfg) == "table" then
+                row.enabled = cfg.enabled == true
+                row.count = math.clamp(math.floor(number(cfg.count) or 1), 1, 99)
+                view:SetAutobuyCrate(id, row.enabled, row.count)
+                view:SetAutobuyProgress(id, row.bought .. "/" .. row.count .. " bought")
+            end
+        end
+    end
+end
+log("settings restored from cache")
 
 connect(view.AutobuyRowToggled, function(id, enabled)
     local row = autobuyRows[id]
@@ -459,6 +568,7 @@ connect(view.AutobuyRowToggled, function(id, enabled)
     row.enabled = enabled == true
     if row.enabled then row.bought = 0 end
     view:SetAutobuyProgress(id, row.bought .. "/" .. row.count .. " bought")
+    if persist then persist() end
 end)
 
 connect(view.AutobuyCountChanged, function(id, count)
@@ -467,30 +577,37 @@ connect(view.AutobuyCountChanged, function(id, count)
     row.count = math.clamp(math.floor(number(count) or 1), 1, 99)
     row.bought = 0
     view:SetAutobuyProgress(id, "0/" .. row.count .. " bought")
+    if persist then persist() end
 end)
 
 connect(view.AutobuyMasterToggled, function(enabled)
     autobuyActive = enabled == true
+    if persist then persist() end
 end)
 
 local autosell = {active = false, balance = nil, price = nil, busy = false, lastSell = 0}
 local SELL_COOLDOWN = 120 -- seconds between auto-sells
 connect(view.AutosellToggled, function(enabled)
     autosell.active = enabled == true
+    if persist then persist() end
 end)
 connect(view.AutosellBalance, function(value)
     autosell.balance = number(value)
+    if persist then persist() end
 end)
 connect(view.AutosellPrice, function(value)
     autosell.price = number(value)
+    if persist then persist() end
 end)
 
 local autocollect = {active = false, interval = 300, last = 0}
 connect(view.AutocollectToggled, function(enabled)
     autocollect.active = enabled == true
+    if persist then persist() end
 end)
 connect(view.AutocollectInterval, function(value)
     autocollect.interval = math.max(10, number(value) or 300)
+    if persist then persist() end
 end)
 
 local function updateCrates()
@@ -530,19 +647,19 @@ connect(view.CrateBuy, function(id)
     if not state or state.buying then return end
 
     if not blackMarketBuy then
-        view:Notify("Buy remote unavailable")
+        view:Notify("CRATES", "Buy remote unavailable")
         return
     end
 
     local amount = readCrateStock(id)
     if amount <= 0 then
-        view:Notify(tostring(state.tier.name or id) .. " is out of stock")
+        view:Notify("CRATES", tostring(state.tier.name or id) .. " is out of stock")
         return
     end
 
     local price = number(state.tier.priceTokens) or 0
     if myTokens() < price then
-        view:Notify("Not enough tokens (need " .. formatNumber(price) .. ")")
+        view:Notify("CRATES", "Not enough tokens (need " .. formatNumber(price) .. ")")
         return
     end
 
@@ -564,7 +681,7 @@ connect(view.CrateBuy, function(id)
             view:Notify("Buy failed: " .. tostring(result))
         elseif type(result) == "table" then
             if result.ok then
-                view:Notify("Bought " .. tostring(state.tier.name or id))
+                view:Notify("CRATES", "Bought " .. tostring(state.tier.name or id))
                 playSound()
             else
                 view:Notify(tostring(result.message or "Can't buy"))
@@ -602,10 +719,10 @@ local function runAutobuySession(id)
     local row = autobuyRows[id]
     local state = crateStates[id]
 
-    view:Notify("Auto-buy: heading to dealer for " .. tostring(state.tier.name or id))
+    view:Notify("AUTO BUY", "Heading to dealer for " .. tostring(state.tier.name or id))
 
     if not teleportToDealer() then
-        view:Notify("Auto-buy failed: character not loaded")
+        view:Notify("AUTO BUY", "Failed: character not loaded")
         autobuySession = false
         return
     end
@@ -668,7 +785,7 @@ local function updatePrice(allowNotification)
         local difference = price - lastPrice
         local direction = difference > 0 and "increased" or "decreased"
         local sign = difference > 0 and "+" or ""
-        view:Notify(string.format(
+        view:Notify("TOKEN EXCHANGE", string.format(
             "Token price %s: $%s -> $%s (%s$%s)",
             direction,
             formatNumber(lastPrice),
@@ -724,30 +841,43 @@ end)
 -- AUTO SELL + AUTO COLLECT RUNNER
 --==================================================
 local function performSell()
+    if autosell.busy then return end
     autosell.busy = true
-    view:Notify("Auto-sell: warping to exchange")
 
-    if warpRemote then
-        pcall(function() warpRemote:FireServer("Sell") end)
-    end
-    task.wait(1.2)
+    local ok, err = pcall(function()
+        view:Notify("AUTO SELL", "Warping to exchange")
 
-    if sellTokensRemote then
-        local ok, err = pcall(function()
-            if sellTokensRemote:IsA("RemoteFunction") then
-                sellTokensRemote:InvokeServer()
-            else
-                sellTokensRemote:FireServer()
-            end
-        end)
-        if not ok then
-            view:Notify("Sell failed: " .. tostring(err))
+        local warp = getWarpRemote()
+        if warp then
+            pcall(function() warp:FireServer("Sell") end)
         end
-    end
-    task.wait(1)
+        task.wait(1.2)
 
-    if warpRemote then
-        pcall(function() warpRemote:FireServer("Home") end)
+        local sell = getSellRemote()
+        if sell then
+            local fired, fireErr = pcall(function()
+                if sell:IsA("RemoteFunction") then
+                    sell:InvokeServer()
+                else
+                    sell:FireServer()
+                end
+            end)
+            if not fired then
+                view:Notify("Sell failed: " .. tostring(fireErr))
+            else
+                view:Notify("AUTO SELL", "Sold at exchange")
+            end
+        else
+            view:Notify("AUTO SELL", "SellTokens remote still missing")
+        end
+        task.wait(1)
+
+        if warp then
+            pcall(function() warp:FireServer("Home") end)
+        end
+    end)
+    if not ok then
+        view:Notify("Auto-sell error: " .. tostring(err))
     end
 
     autosell.lastSell = tick()
@@ -759,23 +889,34 @@ task.spawn(function()
         local ok, err = pcall(function()
             local tokens = myTokens()
             local price = number(Workspace:GetAttribute("TokenPrice"))
+            local sellR = getSellRemote()
+            local warpR = getWarpRemote()
 
-            -- live status readout on the AutoSell card
-            view:SetAutosellStatus(
-                "Tokens: " .. formatNumber(tokens)
-                .. " | Exchange: " .. (price and ("$" .. formatNumber(price)) or "--")
-            )
-
-            -- auto sell: balance + exchange price presets must both pass
-            if autosell.active
-                and not autosell.busy
-                and not autobuySession
-                and sellTokensRemote
-                and warpRemote
-                and tick() - autosell.lastSell >= SELL_COOLDOWN then
-                local balanceOk = (autosell.balance == nil) or (tokens >= autosell.balance)
-                local priceOk = (autosell.price == nil) or (price ~= nil and price >= autosell.price)
-                if balanceOk and priceOk then
+            -- auto sell: surface the exact blocker on the status line
+            if not autosell.active then
+                view:SetAutosellStatus("AUTO SELL off | Tokens: " .. formatNumber(tokens)
+                    .. " | Exchange: " .. (price and ("$" .. formatNumber(price)) or "--"))
+            elseif autosell.busy then
+                view:SetAutosellStatus("SELLING...")
+            elseif not sellR then
+                view:SetAutosellStatus("BLOCKED: SellTokens remote missing")
+            elseif not warpR then
+                view:SetAutosellStatus("BLOCKED: Warp remote missing")
+            elseif tick() - autosell.lastSell < SELL_COOLDOWN then
+                view:SetAutosellStatus("cooldown " .. math.ceil(SELL_COOLDOWN - (tick() - autosell.lastSell)) .. "s")
+            else
+                local waiting = nil
+                if autosell.balance and tokens < autosell.balance then
+                    waiting = "tokens " .. formatNumber(tokens) .. " < " .. formatNumber(autosell.balance)
+                end
+                if autosell.price and (price == nil or price < autosell.price) then
+                    waiting = (waiting and (waiting .. " | ") or "")
+                        .. "price " .. (price and ("$" .. formatNumber(price)) or "--") .. " < $" .. formatNumber(autosell.price)
+                end
+                if waiting then
+                    view:SetAutosellStatus("waiting: " .. waiting)
+                else
+                    view:SetAutosellStatus("conditions met — selling")
                     task.spawn(performSell)
                 end
             end
@@ -792,7 +933,7 @@ task.spawn(function()
                     if drop then
                         hrp.CFrame = drop
                         autocollect.last = tick()
-                        view:Notify("Auto-collect: dropped on your CollectPad")
+                        view:Notify("AUTO COLLECT", "Dropped on your CollectPad")
                         -- land, collect, then head home
                         task.delay(3, function()
                             if alive and warpRemote then
@@ -803,7 +944,7 @@ task.spawn(function()
                         -- plot or CollectPad not resolved yet; retry next tick
                         hrp.CFrame = COLLECT_CFRAME + Vector3.new(0, 3, 0)
                         autocollect.last = tick()
-                        view:Notify("Auto-collect: plot not found, using fallback spot")
+                        view:Notify("AUTO COLLECT", "Plot not found, using fallback spot")
                         task.delay(3, function()
                             if alive and warpRemote then
                                 pcall(function() warpRemote:FireServer("Home") end)
@@ -819,4 +960,4 @@ task.spawn(function()
 end)
 
 log(VERSION .. " loaded. Press Right Shift to open or close.")
-view:Notify(VERSION .. " loaded")
+view:Notify("LEZOR", VERSION .. " loaded")
