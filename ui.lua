@@ -303,6 +303,12 @@ function UI.new(options)
         autobuyMasterToggled:Fire(enabled)
     end)
 
+    function self:SetAutobuyMaster(enabled)
+        autobuyMaster.Text = enabled and "AUTO BUY: ON" or "AUTO BUY: OFF"
+        autobuyMaster.BackgroundColor3 = enabled and colors.white or colors.panel
+        autobuyMaster.TextColor3 = enabled and colors.background or colors.secondary
+    end
+
     local crateList = make("ScrollingFrame", pages.Crates, {
         Size = UDim2.new(1, 0, 1, -32),
         Position = UDim2.fromOffset(0, 32),
@@ -406,16 +412,17 @@ function UI.new(options)
         })
         corner(plus, 5)
 
-        local count = math.max(1, math.floor(item.count or 1))
+        local countState = {count = math.max(1, math.floor(item.count or 1))}
+        countLbl.Text = tostring(countState.count)
         connect(minus.Activated, function()
-            count = math.max(1, count - 1)
-            countLbl.Text = tostring(count)
-            autobuyCountChanged:Fire(item.id, count)
+            countState.count = math.max(1, countState.count - 1)
+            countLbl.Text = tostring(countState.count)
+            autobuyCountChanged:Fire(item.id, countState.count)
         end)
         connect(plus.Activated, function()
-            count = math.min(99, count + 1)
-            countLbl.Text = tostring(count)
-            autobuyCountChanged:Fire(item.id, count)
+            countState.count = math.min(99, countState.count + 1)
+            countLbl.Text = tostring(countState.count)
+            autobuyCountChanged:Fire(item.id, countState.count)
         end)
         connect(abToggle.Activated, function()
             local enabled = abToggle.Text == "AUTO OFF"
@@ -426,7 +433,7 @@ function UI.new(options)
         end)
 
         self.crateRows[item.id] = {stock = stock, buy = buy}
-        self.autobuyRows[item.id] = {progress = progress, count = countLbl, toggle = abToggle}
+        self.autobuyRows[item.id] = {progress = progress, count = countLbl, toggle = abToggle, state = countState}
         connect(buy.Activated, function() crateBuy:Fire(item.id) end)
     end
 
@@ -435,6 +442,20 @@ function UI.new(options)
         if not row then return end
         row.stock.Text = text
         row.stock.TextColor3 = available and colors.white or colors.muted
+    end
+
+    function self:SetAutobuyCrate(id, enabled, count)
+        local row = self.autobuyRows[id]
+        if not row then return end
+        if enabled ~= nil then
+            row.toggle.Text = enabled and "AUTO ON" or "AUTO OFF"
+            row.toggle.BackgroundColor3 = enabled and colors.white or colors.panel
+            row.toggle.TextColor3 = enabled and colors.background or colors.secondary
+        end
+        if count then
+            row.state.count = math.clamp(math.floor(count), 1, 99)
+            row.count.Text = tostring(row.state.count)
+        end
     end
 
     function self:SetCrateBuy(id, text, canBuy)
@@ -468,6 +489,7 @@ function UI.new(options)
     -- Preset button row helper (used by AutoSell / AutoCollect cards)
     local function presetButtons(parentObj, y, options, onPick)
         local buttons = {}
+        local selected = nil
         local function highlight(opt)
             for _, data in ipairs(buttons) do
                 local active = data.opt == opt
@@ -492,10 +514,24 @@ function UI.new(options)
             corner(button, 4)
             table.insert(buttons, {button = button, opt = opt})
             connect(button.Activated, function()
+                selected = opt
                 highlight(opt)
                 onPick(opt.value)
             end)
         end
+        return {
+            select = function(value)
+                selected = nil
+                for _, data in ipairs(buttons) do
+                    if data.opt.value == value then
+                        selected = data.opt
+                        break
+                    end
+                end
+                highlight(selected)
+            end,
+            get = function() return selected and selected.value or nil end,
+        }
     end
 
     local function sectionToggle(parentObj, onChange)
@@ -518,6 +554,7 @@ function UI.new(options)
             toggle.TextColor3 = enabled and colors.background or colors.secondary
             onChange(enabled)
         end)
+        return toggle
     end
 
     local function sectionHeader(parentObj, text)
@@ -545,7 +582,7 @@ function UI.new(options)
         AutomaticSize = Enum.AutomaticSize.Y,
     })
     sectionHeader(sellCard, "AUTO SELL")
-    sectionToggle(sellCard, function(enabled) autosellToggled:Fire(enabled) end)
+    local autosellToggle = sectionToggle(sellCard, function(enabled) autosellToggled:Fire(enabled) end)
 
     local sellStatus = label(sellCard, {
         Text = "Tokens: -- | Exchange: --",
@@ -559,8 +596,8 @@ function UI.new(options)
         Position = UDim2.fromOffset(12, 42),
         Size = UDim2.new(1, -24, 0, 12),
     })
-    presetButtons(sellCard, 56, {
-        {label = "OFF", value = nil},
+    local balanceRow = presetButtons(sellCard, 56, {
+        {label = "OFF", value = false},
         {label = "5B", value = 5e9},
         {label = "10B", value = 10e9},
         {label = "20B", value = 20e9},
@@ -574,8 +611,8 @@ function UI.new(options)
         Position = UDim2.fromOffset(12, 84),
         Size = UDim2.new(1, -24, 0, 12),
     })
-    presetButtons(sellCard, 98, {
-        {label = "OFF", value = nil},
+    local priceRow = presetButtons(sellCard, 98, {
+        {label = "OFF", value = false},
         {label = "$5", value = 5},
         {label = "$10", value = 10},
         {label = "$13", value = 13},
@@ -589,14 +626,14 @@ function UI.new(options)
         AutomaticSize = Enum.AutomaticSize.Y,
     })
     sectionHeader(collectCard, "AUTO COLLECT")
-    sectionToggle(collectCard, function(enabled) autocollectToggled:Fire(enabled) end)
+    local autocollectToggle = sectionToggle(collectCard, function(enabled) autocollectToggled:Fire(enabled) end)
     label(collectCard, {
         Text = "DROP EVERY",
         TextSize = 8,
         Position = UDim2.fromOffset(12, 26),
         Size = UDim2.new(1, -24, 0, 12),
     })
-    presetButtons(collectCard, 40, {
+    local intervalRow = presetButtons(collectCard, 40, {
         {label = "1 min", value = 60},
         {label = "5 min", value = 300},
         {label = "10 min", value = 600},
@@ -605,6 +642,29 @@ function UI.new(options)
 
     function self:SetAutosellStatus(text)
         sellStatus.Text = tostring(text)
+    end
+
+    -- State-restore setters (used by the settings cache; never fire events)
+    local function paintToggle(button, enabled, onText, offText)
+        button.Text = enabled and onText or offText
+        button.BackgroundColor3 = enabled and colors.white or colors.panel
+        button.TextColor3 = enabled and colors.background or colors.secondary
+    end
+
+    function self:SetAutosellEnabled(enabled)
+        paintToggle(autosellToggle, enabled, "ON", "OFF")
+    end
+    function self:SetAutosellBalance(value)
+        balanceRow.select(value or false)
+    end
+    function self:SetAutosellPrice(value)
+        priceRow.select(value or false)
+    end
+    function self:SetAutocollectEnabled(enabled)
+        paintToggle(autocollectToggle, enabled, "ON", "OFF")
+    end
+    function self:SetAutocollectInterval(seconds)
+        intervalRow.select(seconds)
     end
 
     function self:AddItem(category, item)
@@ -707,6 +767,10 @@ function UI.new(options)
         soundToggled:Fire(soundEnabled)
     end)
 
+    function self:SetSoundEnabled(enabled)
+        paintToggle(soundButton, enabled, "SOUND ON", "SOUND OFF")
+    end
+
     local unloadCard = card(pages.Settings, {
         Position = UDim2.fromOffset(0, 100),
         Size = UDim2.new(1, 0, 0, 72),
@@ -754,8 +818,8 @@ function UI.new(options)
         ZIndex = 51,
     })
     corner(indicator, 2)
-    label(banner, {
-        Text = "MARKET ALERT",
+    local bannerTitle = label(banner, {
+        Text = "LEZOR",
         Font = Enum.Font.GothamBold,
         TextSize = 14,
         TextColor3 = colors.white,
@@ -774,15 +838,21 @@ function UI.new(options)
     })
 
     local processing = false
-    function self:Notify(text)
+    function self:Notify(title, text)
         if not self.alive then return end
-        table.insert(self.queue, tostring(text))
+        if text == nil then
+            text = title
+            title = "LEZOR"
+        end
+        table.insert(self.queue, {title = tostring(title), text = tostring(text)})
         if processing then return end
         processing = true
 
         task.spawn(function()
             while self.alive and #self.queue > 0 do
-                message.Text = table.remove(self.queue, 1)
+                local entry = table.remove(self.queue, 1)
+                bannerTitle.Text = entry.title
+                message.Text = entry.text
                 banner.Position = UDim2.new(1, 430, 1, -18)
                 banner.Visible = true
                 shown:Fire()
