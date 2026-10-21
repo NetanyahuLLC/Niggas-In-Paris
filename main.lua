@@ -67,19 +67,27 @@ local function number(value)
 end
 
 local WORD_SCALES = {
-    {1e12, "Trillion"},
-    {1e9, "Billion"},
-    {1e6, "Million"},
+    {1e12, " Trillion"},
+    {1e9, " Billion"},
+    {1e6, " Million"},
+    {1e3, "k"},
 }
 
 local function formatNumber(value)
     local n = number(value)
     if not n then return "N/A" end
     local absN = math.abs(n)
-    for _, scale in ipairs(WORD_SCALES) do
+    for index, scale in ipairs(WORD_SCALES) do
         if absN >= scale[1] then
-            local text = string.format("%.1f", n / scale[1]):gsub("%.0$", "")
-            return text .. " " .. scale[2]
+            local value = n / scale[1]
+            local text = string.format("%.1f", value):gsub("%.0$", "")
+            -- 999,999 would round to "1000k"; promote to the next tier instead
+            local bigger = WORD_SCALES[index - 1]
+            if bigger and tonumber(text) and tonumber(text) >= 1000 then
+                text = string.format("%.1f", n / bigger[1]):gsub("%.0$", "")
+                return text .. bigger[2]
+            end
+            return text .. scale[2]
         end
     end
     if n % 1 == 0 then return tostring(math.floor(n)) end
