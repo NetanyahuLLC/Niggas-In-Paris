@@ -1,7 +1,7 @@
 -- EXECUTOR/GITHUB LOADER:
 -- Replace only this URL with the raw URL of your repository's ui.lua.
-local UI_URL = "PASTE_YOUR_RAW_UI_LUA_URL_HERE"
-assert(UI_URL ~= "PASTE_YOUR_RAW_UI_LUA_URL_HERE", "Set UI_URL to your raw GitHub ui.lua URL first.")
+local UI_URL = "https://raw.githubusercontent.com/NetanyahuLLC/Niggas-In-Paris/refs/heads/main/ui.lua?token=GHSAT0AAAAAAENGCRHXZBZ2OXAIQN7OKCP62WYKRWQ"
+assert(UI_URL ~= "https://raw.githubusercontent.com/NetanyahuLLC/Niggas-In-Paris/refs/heads/main/ui.lua?token=GHSAT0AAAAAAENGCRHXZBZ2OXAIQN7OKCP62WYKRWQ", "Set UI_URL to your raw GitHub ui.lua URL first.")
 local source = game:HttpGet(UI_URL)
 local chunk, parseError = loadstring(source, "ui.lua")
 assert(chunk, parseError)
